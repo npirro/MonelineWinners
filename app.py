@@ -136,12 +136,17 @@ st.markdown("""
         box-shadow: 0 18px 38px rgba(0,0,0,0.34);
     }
 
-    div[data-testid="stMetricLabel"] {
-        color: #dbeafe !important;
+    div[data-testid="stMetricLabel"],
+    div[data-testid="stMetricLabel"] p,
+    div[data-testid="stMetricLabel"] label,
+    div[data-testid="stMetricLabel"] span {
+        color: #bfdbfe !important;
+        opacity: 1 !important;
         font-weight: 950 !important;
-        font-size: .9rem !important;
-        text-transform: uppercase;
-        letter-spacing: .06em;
+        font-size: .88rem !important;
+        text-transform: uppercase !important;
+        letter-spacing: .11em !important;
+        text-shadow: 0 2px 14px rgba(0,0,0,.55);
     }
 
     div[data-testid="stMetricValue"] {
@@ -318,6 +323,14 @@ st.markdown("""
         line-height: 1.35;
         font-weight: 650;
     }
+
+    /* KPI label fallback — keeps the top metric words readable on Streamlit Cloud */
+    [data-testid="stMetric"] [data-testid="stMetricLabel"] * {
+        color: #bfdbfe !important;
+        opacity: 1 !important;
+        font-weight: 950 !important;
+    }
+
 </style>
 """, unsafe_allow_html=True)
 

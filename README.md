@@ -1,10 +1,9 @@
-# Moneyline Winners — Streamlit App v5
+# Moneyline Winners — Streamlit App v6
 
-Visual polish update:
-- Brighter KPI tile labels
-- KPI tiles styled closer to the winner cards
-- Sidebar scoring weights redesigned to match the card aesthetic
-- Same v4 logic and odds remain informational only
+Visual hotfix:
+- KPI labels now use the same bright readable blue as the projected winner card rank text.
+- No model logic changes.
+- Odds remain informational only.
 
 Run:
 ```bash

@@ -7,7 +7,8 @@ import math
 st.set_page_config(
     page_title="Moneyline Winners",
     page_icon="⚾",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 CORE_COLUMNS = [
@@ -17,7 +18,6 @@ CORE_COLUMNS = [
 ]
 
 OPTIONAL_COLUMNS = ["Moneyline"]
-
 ALL_COLUMNS = CORE_COLUMNS + OPTIONAL_COLUMNS
 
 DEFAULT_WEIGHTS = {
@@ -42,145 +42,216 @@ SAMPLE_DATA = pd.DataFrame([
 
 st.markdown("""
 <style>
-    .block-container { padding-top: 2rem; max-width: 1500px; }
+    html, body, [data-testid="stAppViewContainer"] {
+        background: #05070d !important;
+        color: #f8fafc !important;
+    }
+
+    [data-testid="stHeader"] {
+        background: rgba(5, 7, 13, 0.95) !important;
+    }
+
+    [data-testid="stSidebar"] {
+        background: #090d16 !important;
+        border-right: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .block-container {
+        padding-top: 1.4rem;
+        max-width: 1550px;
+    }
+
+    .hero-card {
+        background: radial-gradient(circle at top left, rgba(59,130,246,.28), transparent 32%),
+                    linear-gradient(135deg, #0b1020 0%, #111827 55%, #172033 100%);
+        border: 1px solid rgba(255,255,255,0.11);
+        border-radius: 26px;
+        padding: 30px 34px;
+        margin-bottom: 18px;
+        box-shadow: 0 22px 55px rgba(0,0,0,.42);
+    }
+
+    .hero-title {
+        font-size: 3.15rem;
+        line-height: 1;
+        font-weight: 950;
+        color: #ffffff;
+        margin: 0 0 10px 0;
+        letter-spacing: -.04em;
+    }
+
+    .hero-subtitle {
+        color: #cbd5e1;
+        font-size: 1.08rem;
+        font-weight: 600;
+    }
 
     div[data-testid="stMetric"] {
-        background: linear-gradient(145deg, #111827, #1f2937);
-        border: 1px solid rgba(255,255,255,0.08);
+        background: linear-gradient(145deg, #0b1020, #111827);
+        border: 1px solid rgba(255,255,255,0.10);
         padding: 18px 20px;
+        border-radius: 20px;
+        box-shadow: 0 14px 34px rgba(0,0,0,0.34);
+    }
+
+    div[data-testid="stMetricLabel"] {
+        color: #cbd5e1 !important;
+        font-weight: 850 !important;
+    }
+
+    div[data-testid="stMetricValue"] {
+        color: #ffffff !important;
+        font-size: 2.2rem !important;
+        font-weight: 950 !important;
+    }
+
+    .info-strip {
+        background: rgba(37,99,235,.15);
+        border: 1px solid rgba(96,165,250,.34);
+        color: #dbeafe;
         border-radius: 18px;
-        box-shadow: 0 12px 30px rgba(0,0,0,0.22);
+        padding: 14px 17px;
+        margin: 12px 0 20px 0;
+        font-weight: 750;
     }
 
-    div[data-testid="stMetricLabel"] { color: #9ca3af; font-weight: 700; }
-    div[data-testid="stMetricValue"] { font-size: 2.1rem; font-weight: 900; }
-
-    .hero {
-        background: linear-gradient(135deg, #0f172a 0%, #111827 55%, #1e293b 100%);
-        border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 24px;
-        padding: 28px 30px;
-        margin-bottom: 18px;
-        box-shadow: 0 18px 40px rgba(0,0,0,0.25);
-    }
-
-    .hero h1 { font-size: 3rem; margin-bottom: 4px; }
-    .hero p { color: #9ca3af; font-size: 1.05rem; }
-
-    .tile-grid {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 16px;
-        margin-top: 12px;
-        margin-bottom: 22px;
+    .section-title {
+        font-size: 1.65rem;
+        font-weight: 950;
+        color: #ffffff;
+        margin: 24px 0 12px 0;
+        letter-spacing: -.02em;
     }
 
     .team-card {
-        background: linear-gradient(145deg, #111827, #1f2937);
-        border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 20px;
-        padding: 18px;
-        box-shadow: 0 14px 32px rgba(0,0,0,0.22);
-        min-height: 205px;
+        background: linear-gradient(145deg, #0b1020 0%, #111827 70%, #151f32 100%);
+        border: 1px solid rgba(255,255,255,0.11);
+        border-radius: 22px;
+        padding: 19px 20px;
+        min-height: 245px;
+        box-shadow: 0 18px 38px rgba(0,0,0,0.34);
+        margin-bottom: 16px;
     }
 
-    .team-card-a { border-left: 7px solid #22c55e; }
-    .team-card-b { border-left: 7px solid #3b82f6; }
-    .team-card-c { border-left: 7px solid #f59e0b; }
-    .team-card-pass { border-left: 7px solid #ef4444; }
+    .team-card-a { border-left: 8px solid #22c55e; }
+    .team-card-b { border-left: 8px solid #3b82f6; }
+    .team-card-c { border-left: 8px solid #f59e0b; }
+    .team-card-pass { border-left: 8px solid #ef4444; }
 
-    .rank {
-        color: #9ca3af;
-        font-size: 0.8rem;
-        font-weight: 800;
+    .rank-line {
+        color: #93a4bd;
+        font-size: .78rem;
+        font-weight: 950;
+        text-transform: uppercase;
+        letter-spacing: .11em;
+        margin-bottom: 12px;
+    }
+
+    .team-name {
+        color: #ffffff;
+        font-size: 2.2rem;
+        font-weight: 950;
+        line-height: 1;
+        margin-bottom: 6px;
+    }
+
+    .matchup {
+        color: #cbd5e1;
+        font-size: 1rem;
+        font-weight: 700;
+        margin-bottom: 16px;
+    }
+
+    .score-flex {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin: 12px 0;
+    }
+
+    .score-label {
+        color: #93a4bd;
+        font-size: .75rem;
+        font-weight: 950;
         text-transform: uppercase;
         letter-spacing: .08em;
     }
 
-    .team-name {
-        font-size: 2rem;
-        font-weight: 950;
-        margin-top: 4px;
-        margin-bottom: 0px;
-    }
-
-    .matchup {
-        color: #9ca3af;
-        font-size: 0.95rem;
-        margin-bottom: 14px;
-    }
-
-    .score-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-top: 10px;
-    }
-
     .win-score {
-        font-size: 2rem;
+        color: #ffffff;
+        font-size: 2.35rem;
         font-weight: 950;
+        line-height: 1;
     }
 
     .grade-pill {
         border-radius: 999px;
-        padding: 6px 12px;
+        padding: 8px 14px;
+        font-weight: 950;
+        font-size: .9rem;
+    }
+
+    .pill-a { background: rgba(34,197,94,.2); color: #86efac; border: 1px solid rgba(34,197,94,.35); }
+    .pill-b { background: rgba(59,130,246,.2); color: #bfdbfe; border: 1px solid rgba(59,130,246,.35); }
+    .pill-c { background: rgba(245,158,11,.2); color: #fde68a; border: 1px solid rgba(245,158,11,.35); }
+    .pill-pass { background: rgba(239,68,68,.2); color: #fecaca; border: 1px solid rgba(239,68,68,.35); }
+
+    .odds {
+        color: #ffffff;
         font-weight: 900;
-        font-size: .85rem;
-    }
-
-    .pill-a { background: rgba(34,197,94,.16); color: #86efac; }
-    .pill-b { background: rgba(59,130,246,.16); color: #93c5fd; }
-    .pill-c { background: rgba(245,158,11,.16); color: #fcd34d; }
-    .pill-pass { background: rgba(239,68,68,.16); color: #fca5a5; }
-
-    .odds-line {
-        margin-top: 10px;
-        color: #e5e7eb;
-        font-weight: 850;
-        font-size: .95rem;
-    }
-
-    .odds-caption {
-        color: #9ca3af;
-        font-size: .78rem;
-        margin-top: 2px;
-    }
-
-    .card-footer {
-        color: #9ca3af;
-        font-size: .85rem;
         margin-top: 12px;
-        line-height: 1.35;
+        font-size: 1rem;
     }
 
-    .section-title {
-        font-size: 1.55rem;
-        font-weight: 900;
-        margin-top: 18px;
-        margin-bottom: 10px;
+    .odds-note {
+        color: #aab8cf;
+        font-size: .83rem;
+        margin-top: 2px;
+        line-height: 1.3;
     }
 
-    .note-box {
-        background: rgba(59,130,246,.10);
-        border: 1px solid rgba(59,130,246,.25);
-        color: #bfdbfe;
-        border-radius: 16px;
-        padding: 14px 16px;
-        margin-bottom: 18px;
-        font-weight: 650;
+    .footer-note {
+        color: #cbd5e1;
+        font-size: .9rem;
+        line-height: 1.38;
+        margin-top: 13px;
     }
 
-    @media (max-width: 1200px) {
-        .tile-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .footer-note b {
+        color: #ffffff;
     }
 
-    @media (max-width: 700px) {
-        .tile-grid { grid-template-columns: 1fr; }
-        .hero h1 { font-size: 2.2rem; }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 12px;
+    }
+
+    .stTabs [data-baseweb="tab"] {
+        background: #0b1020;
+        border-radius: 12px 12px 0 0;
+        color: #cbd5e1;
+        font-weight: 850;
+        border: 1px solid rgba(255,255,255,.08);
+    }
+
+    .stTabs [aria-selected="true"] {
+        color: #ffffff !important;
+        background: #172033 !important;
+        border-bottom: 2px solid #60a5fa !important;
+    }
+
+    [data-testid="stDataFrame"] {
+        border: 1px solid rgba(255,255,255,.10);
+        border-radius: 18px;
+        overflow: hidden;
     }
 </style>
 """, unsafe_allow_html=True)
+
+
+def safe_text(value):
+    if pd.isna(value):
+        return ""
+    return str(value).replace("<", "").replace(">", "")
 
 
 def grade_score(score: float) -> str:
@@ -219,10 +290,8 @@ def moneyline_to_implied(ml):
         ml = float(ml)
     except Exception:
         return None
-
     if math.isnan(ml) or ml == 0:
         return None
-
     if ml < 0:
         return abs(ml) / (abs(ml) + 100)
     return 100 / (ml + 100)
@@ -233,10 +302,8 @@ def format_moneyline(ml):
         ml = float(ml)
     except Exception:
         return "—"
-
     if math.isnan(ml) or ml == 0:
         return "—"
-
     if ml > 0:
         return f"+{int(ml)}"
     return str(int(ml))
@@ -247,10 +314,8 @@ def reward_view(ml):
         ml = float(ml)
     except Exception:
         return "No odds entered"
-
     if math.isnan(ml) or ml == 0:
         return "No odds entered"
-
     if ml >= 120:
         return "Plus-money reward"
     if ml > 0:
@@ -298,18 +363,16 @@ def validate_data(df: pd.DataFrame):
 
     score_cols = ["SP_Score", "Offense_Score", "Bullpen_Score", "Lineup_Score", "Situational_Score"]
     for col in score_cols:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-        if df[col].isna().any():
+        converted = pd.to_numeric(df[col], errors="coerce")
+        if converted.isna().any():
             errors.append(f"{col} contains blank or non-numeric values.")
-        if ((df[col] < 0) | (df[col] > 100)).any():
+        if ((converted < 0) | (converted > 100)).any():
             errors.append(f"{col} must be between 0 and 100.")
-
     return errors
 
 
 def score_board(df: pd.DataFrame, weights: dict) -> pd.DataFrame:
     df = df.copy()
-
     if "Moneyline" not in df.columns:
         df["Moneyline"] = None
 
@@ -332,7 +395,6 @@ def score_board(df: pd.DataFrame, weights: dict) -> pd.DataFrame:
     df["Suggested_Status"] = df["Win_Score"].apply(grade_label)
     df["Strongest_Metric"] = df.apply(strongest_metric, axis=1)
     df["Profile"] = df.apply(profile_flags, axis=1)
-
     df["Moneyline_Display"] = df["Moneyline"].apply(format_moneyline)
     df["Implied_Probability"] = df["Moneyline"].apply(moneyline_to_implied)
     df["Implied_Probability"] = df["Implied_Probability"].apply(lambda x: round(x * 100, 1) if x is not None else None)
@@ -343,49 +405,56 @@ def score_board(df: pd.DataFrame, weights: dict) -> pd.DataFrame:
     return df
 
 
-def render_team_tiles(board: pd.DataFrame, max_cards: int = 8):
-    cards = []
-    for _, row in board.head(max_cards).iterrows():
-        g = row["Grade"]
-        cls = grade_class(g)
-        home_text = "Home" if str(row["Home"]).lower() in ["yes", "true", "1", "home"] else "Away"
-        notes = str(row.get("Notes", ""))[:80]
-        ml = row.get("Moneyline_Display", "—")
-        reward = row.get("Reward_View", "No odds entered")
+def render_card(row):
+    g = safe_text(row["Grade"])
+    cls = grade_class(g)
+    home_text = "HOME" if str(row["Home"]).lower() in ["yes", "true", "1", "home"] else "AWAY"
+    notes = safe_text(row.get("Notes", ""))[:85]
+    team = safe_text(row["Team"])
+    opp = safe_text(row["Opponent"])
+    metric = safe_text(row["Strongest_Metric"])
+    profile = safe_text(row["Profile"])
+    ml = safe_text(row.get("Moneyline_Display", "—"))
+    reward = safe_text(row.get("Reward_View", "No odds entered"))
 
-        cards.append(f"""
-        <div class="team-card team-card-{cls}">
-            <div class="rank">Rank #{int(row["Rank"])} · {home_text}</div>
-            <div class="team-name">{row["Team"]}</div>
-            <div class="matchup">vs {row["Opponent"]}</div>
-            <div class="score-row">
-                <div>
-                    <div style="color:#9ca3af;font-size:.8rem;font-weight:800;">WIN SCORE</div>
-                    <div class="win-score">{row["Win_Score"]}</div>
-                </div>
-                <div class="grade-pill pill-{cls}">{g}</div>
+    st.markdown(f"""
+    <div class="team-card team-card-{cls}">
+        <div class="rank-line">RANK #{int(row["Rank"])} · {home_text}</div>
+        <div class="team-name">{team}</div>
+        <div class="matchup">vs {opp}</div>
+        <div class="score-flex">
+            <div>
+                <div class="score-label">Win Score</div>
+                <div class="win-score">{row["Win_Score"]}</div>
             </div>
-            <div class="odds-line">Odds: {ml}</div>
-            <div class="odds-caption">{reward} · odds do not affect rank</div>
-            <div class="card-footer">
-                <b>{row["Strongest_Metric"]}</b> · {row["Profile"]}<br>
-                {notes}
-            </div>
+            <div class="grade-pill pill-{cls}">{g}</div>
         </div>
-        """)
+        <div class="odds">Odds: {ml}</div>
+        <div class="odds-note">{reward} · odds do not affect rank</div>
+        <div class="footer-note"><b>{metric}</b> · {profile}<br>{notes}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.markdown('<div class="tile-grid">' + "".join(cards) + "</div>", unsafe_allow_html=True)
+
+def render_team_tiles(board: pd.DataFrame, max_cards: int = 8):
+    top = board.head(max_cards).reset_index(drop=True)
+    for start in range(0, len(top), 4):
+        cols = st.columns(4)
+        chunk = top.iloc[start:start+4]
+        for col, (_, row) in zip(cols, chunk.iterrows()):
+            with col:
+                render_card(row)
 
 
 def color_grade(val):
     if val == "A":
         return "background-color: #123d22; color: #7ee787; font-weight: 800"
     if val == "B":
-        return "background-color: #102f4f; color: #79c0ff; font-weight: 800"
+        return "background-color: #102f4f; color: #bfdbfe; font-weight: 800"
     if val == "C":
-        return "background-color: #3d2f10; color: #e3b341; font-weight: 800"
+        return "background-color: #3d2f10; color: #fde68a; font-weight: 800"
     if val == "Pass":
-        return "background-color: #4a1717; color: #ff7b72; font-weight: 800"
+        return "background-color: #4a1717; color: #fecaca; font-weight: 800"
     return ""
 
 
@@ -394,17 +463,20 @@ def style_grades(df: pd.DataFrame):
 
 
 st.markdown("""
-<div class="hero">
-    <h1>⚾ Moneyline Winners</h1>
-    <p>Projected MLB winner rankings based on baseball metrics only. Odds are optional and informational only.</p>
+<div class="hero-card">
+    <div class="hero-title">⚾ Moneyline Winners</div>
+    <div class="hero-subtitle">
+        Projected MLB winner rankings based on baseball metrics only. Odds are optional reward context and never change the picks.
+    </div>
 </div>
 """, unsafe_allow_html=True)
 
 st.markdown("""
-<div class="note-box">
+<div class="info-strip">
     Suggested picks are based only on Win Score and Grade. Moneyline odds are shown only so you can decide whether the reward is worth betting.
 </div>
 """, unsafe_allow_html=True)
+
 
 with st.sidebar:
     st.header("Scoring Weights")
@@ -424,6 +496,7 @@ with st.sidebar:
     st.write("**78-84** = B — Playable")
     st.write("**70-77** = C — Thin")
     st.write("**<70** = Pass")
+
 
 tab1, tab2, tab3 = st.tabs(["Dashboard", "Data Input", "Metric Guide"])
 
@@ -472,6 +545,7 @@ with tab2:
     )
     st.session_state["daily_data"] = edited
 
+
 with tab1:
     df = st.session_state.get("daily_data", SAMPLE_DATA.copy())
     errors = validate_data(df.copy())
@@ -486,6 +560,7 @@ with tab1:
         a_count = int((board["Grade"] == "A").sum())
         b_count = int((board["Grade"] == "B").sum())
         top_score = board["Win_Score"].max() if len(board) else 0
+        plus_money_count = int(pd.to_numeric(board["Moneyline"], errors="coerce").fillna(-9999).gt(0).sum())
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Teams Ranked", len(board))
@@ -515,6 +590,7 @@ with tab1:
             file_name=f"moneyline_winners_board_{date.today().isoformat()}.csv",
             mime="text/csv"
         )
+
 
 with tab3:
     st.subheader("Metric Guide")

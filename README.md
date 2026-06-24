@@ -1,10 +1,12 @@
-# Moneyline Winners — Streamlit App v9
+# Moneyline Winners — Streamlit App v10
 
-Hotfix on top of v8:
-- Restores bright white/light-blue KPI text on top tiles.
-- Keeps live MLB engine.
-- Keeps one-side-per-game suggested board.
-- Keeps odds informational only.
+Phase 2 upgrade:
+- Adds Model Confidence rating
+- Adds matchup score gap
+- Adds "Why" reason tags
+- Sorts suggested board by confidence + win score
+- Keeps one-side-per-game logic
+- Keeps odds informational only
 
 Run:
 ```bash

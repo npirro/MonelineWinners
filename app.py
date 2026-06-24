@@ -342,6 +342,34 @@ st.markdown("""
         font-weight: 950 !important;
     }
 
+
+    .reason-chip {
+        display: inline-block;
+        background: rgba(96,165,250,.14);
+        border: 1px solid rgba(96,165,250,.28);
+        color: #dbeafe;
+        border-radius: 999px;
+        padding: 4px 8px;
+        font-size: .72rem;
+        font-weight: 850;
+        margin: 3px 4px 0 0;
+        white-space: nowrap;
+    }
+
+    .confidence-line {
+        color: #ffffff;
+        font-weight: 950;
+        margin-top: 8px;
+        font-size: 1rem;
+    }
+
+    .confidence-note {
+        color: #bfdbfe;
+        font-size: .8rem;
+        font-weight: 750;
+        margin-top: 2px;
+    }
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -738,34 +766,156 @@ def build_live_board(slate_date):
 
 
 
+
+def build_reason_tags(row, opponent_row=None):
+    reasons = []
+
+    if row.get("SP_Score", 0) >= 85:
+        reasons.append("Elite SP")
+    elif row.get("SP_Score", 0) >= 78:
+        reasons.append("SP Edge")
+
+    if row.get("Offense_Score", 0) >= 85:
+        reasons.append("Elite Offense")
+    elif row.get("Offense_Score", 0) >= 78:
+        reasons.append("Offense Edge")
+
+    if row.get("Bullpen_Score", 0) >= 85:
+        reasons.append("Pitching Edge")
+    elif row.get("Bullpen_Score", 0) >= 78:
+        reasons.append("Solid Pitching")
+
+    if row.get("Lineup_Score", 0) >= 82:
+        reasons.append("Lineup Edge")
+
+    if str(row.get("Home", "")).lower() in ["yes", "true", "1", "home"]:
+        reasons.append("Home Field")
+
+    if opponent_row is not None:
+        sp_gap = row.get("SP_Score", 0) - opponent_row.get("SP_Score", 0)
+        off_gap = row.get("Offense_Score", 0) - opponent_row.get("Offense_Score", 0)
+        pen_gap = row.get("Bullpen_Score", 0) - opponent_row.get("Bullpen_Score", 0)
+        lu_gap = row.get("Lineup_Score", 0) - opponent_row.get("Lineup_Score", 0)
+
+        if sp_gap >= 8:
+            reasons.append("SP Mismatch")
+        if off_gap >= 8:
+            reasons.append("Offense Mismatch")
+        if pen_gap >= 8:
+            reasons.append("Bullpen Mismatch")
+        if lu_gap >= 8:
+            reasons.append("Lineup Mismatch")
+
+    if not reasons:
+        reasons.append("Balanced Edge")
+
+    return " | ".join(reasons[:6])
+
+
+def confidence_from_gap(win_score, score_gap):
+    """
+    Confidence is not a true win probability yet.
+    It is a model-confidence rating based on team strength plus gap over opponent.
+    """
+    base = 50
+    base += max(0, win_score - 70) * 1.15
+    base += max(0, score_gap) * 1.85
+
+    if win_score >= 85:
+        base += 5
+    elif win_score >= 78:
+        base += 2
+
+    if score_gap < 3:
+        base -= 8
+    elif score_gap >= 10:
+        base += 5
+
+    return round(clamp(base, 35, 96), 1)
+
+
+def confidence_label(confidence, gap):
+    if confidence >= 88 and gap >= 7:
+        return "High Confidence"
+    if confidence >= 78 and gap >= 4:
+        return "Medium-High Confidence"
+    if confidence >= 68:
+        return "Medium Confidence"
+    return "Low Confidence"
+
+
+def enhanced_status(row):
+    grade = row.get("Grade", "Pass")
+    confidence = row.get("Model_Confidence", 0)
+    gap = row.get("Game_Score_Gap", 0)
+
+    if grade == "A" and confidence >= 85 and gap >= 6:
+        return "A — Core projected winner"
+    if grade in ["A", "B"] and confidence >= 76 and gap >= 4:
+        return "B — Playable winner candidate"
+    if grade in ["A", "B", "C"] and gap >= 2:
+        return "C — Thin / watchlist only"
+    return "Pass / No strong separation"
+
+
 def apply_one_side_per_game(board):
     """
     Keeps only the highest-rated team from each MLB game as a suggested side.
-    Both teams are still available in the full board for transparency.
+    Adds matchup gap, confidence, and reason tags.
     """
     board = board.copy()
 
     if "Game_PK" not in board.columns:
         board["Suggested_Side"] = True
-        board["Game_Winner_Filter"] = "Suggested"
+        board["Game_Winner_Filter"] = "Suggested Side"
+        board["Game_Score_Gap"] = 0
+        board["Model_Confidence"] = board["Win_Score"].apply(lambda x: confidence_from_gap(x, 0))
+        board["Confidence_Label"] = board.apply(lambda r: confidence_label(r["Model_Confidence"], r["Game_Score_Gap"]), axis=1)
+        board["Why"] = board.apply(lambda r: build_reason_tags(r), axis=1)
+        board["Suggested_Status"] = board.apply(enhanced_status, axis=1)
         return board, board
 
-    # Rank teams inside each game by Win Score.
-    board["Game_Side_Rank"] = board.groupby("Game_PK")["Win_Score"].rank(
-        method="first",
-        ascending=False
-    )
+    enhanced_rows = []
 
-    board["Suggested_Side"] = board["Game_Side_Rank"] == 1
-    board["Game_Winner_Filter"] = board["Suggested_Side"].apply(
-        lambda x: "Suggested Side" if x else "Opponent Side / Not Suggested"
-    )
+    for game_pk, group in board.groupby("Game_PK"):
+        group = group.sort_values("Win_Score", ascending=False).copy()
+        if len(group) == 1:
+            row = group.iloc[0].copy()
+            row["Game_Score_Gap"] = 0
+            row["Suggested_Side"] = True
+            row["Game_Winner_Filter"] = "Suggested Side"
+            row["Model_Confidence"] = confidence_from_gap(row["Win_Score"], 0)
+            row["Confidence_Label"] = confidence_label(row["Model_Confidence"], row["Game_Score_Gap"])
+            row["Why"] = build_reason_tags(row)
+            row["Suggested_Status"] = enhanced_status(row)
+            enhanced_rows.append(row)
+            continue
 
-    suggested = board[board["Suggested_Side"]].copy()
-    suggested = suggested.sort_values("Win_Score", ascending=False).reset_index(drop=True)
+        top = group.iloc[0].copy()
+        second = group.iloc[1].copy()
+
+        for idx, row in group.iterrows():
+            row = row.copy()
+            opponent = second if row.name == top.name else top
+            gap = row["Win_Score"] - opponent["Win_Score"]
+
+            row["Game_Score_Gap"] = round(gap, 1)
+            row["Suggested_Side"] = row.name == top.name
+            row["Game_Winner_Filter"] = "Suggested Side" if row["Suggested_Side"] else "Opponent Side / Not Suggested"
+            row["Model_Confidence"] = confidence_from_gap(row["Win_Score"], max(gap, 0))
+            row["Confidence_Label"] = confidence_label(row["Model_Confidence"], max(gap, 0))
+            row["Why"] = build_reason_tags(row, opponent)
+            row["Suggested_Status"] = enhanced_status(row)
+
+            enhanced_rows.append(row)
+
+    full = pd.DataFrame(enhanced_rows)
+    suggested = full[full["Suggested_Side"]].copy()
+
+    suggested = suggested.sort_values(["Model_Confidence", "Win_Score"], ascending=False).reset_index(drop=True)
     suggested["Rank"] = suggested.index + 1
 
-    full = board.sort_values(["Game_PK", "Game_Side_Rank"]).reset_index(drop=True)
+    full = full.sort_values(["Game_PK", "Suggested_Side", "Win_Score"], ascending=[True, False, False]).reset_index(drop=True)
     return suggested, full
 
 
@@ -781,6 +931,7 @@ def render_card(row):
     ml = safe_text(row.get("Moneyline_Display", "—"))
     reward = safe_text(row.get("Reward_View", "No odds entered"))
     pitcher = safe_text(row.get("Starting_Pitcher", "TBD"))
+    reason_html = "".join([f'<span class="reason-chip">{safe_text(x)}</span>' for x in safe_text(row.get("Why", "")).split(" | ") if x])
 
     st.markdown(f"""
     <div class="team-card team-card-{cls}">
@@ -795,8 +946,11 @@ def render_card(row):
             </div>
             <div class="grade-pill pill-{cls}">{g}</div>
         </div>
+        <div class="confidence-line">Confidence: {row.get("Model_Confidence", "—")}%</div>
+        <div class="confidence-note">{safe_text(row.get("Confidence_Label", ""))} · Gap: {row.get("Game_Score_Gap", "—")}</div>
         <div class="odds">Odds: {ml}</div>
         <div class="odds-note">{reward} · odds do not affect rank</div>
+        <div style="margin-top:10px;">{reason_html}</div>
         <div class="footer-note"><b>{metric}</b> · {profile}<br>{notes}</div>
     </div>
     """, unsafe_allow_html=True)
@@ -832,7 +986,7 @@ st.markdown("""
 <div class="hero-card">
     <div class="hero-title">⚾ Moneyline Winners</div>
     <div class="hero-subtitle">
-        Live MLB projected winner engine. Pulls today’s slate and suggests only one side per game.
+        Live MLB projected winner engine with confidence ratings, matchup gaps, and one suggested side per game.
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -980,8 +1134,9 @@ with tab1:
         st.markdown('<div class="section-title">Suggested Winners Board</div>', unsafe_allow_html=True)
         suggested_cols = [
             "Rank", "Team", "Opponent", "Home", "Starting_Pitcher", "Win_Score", "Grade",
-            "Suggested_Status", "Moneyline_Display", "Implied_Probability",
-            "Reward_View", "SP_Score", "Offense_Score", "Bullpen_Score",
+            "Model_Confidence", "Confidence_Label", "Game_Score_Gap", "Suggested_Status", "Why",
+            "Moneyline_Display", "Implied_Probability", "Reward_View",
+            "SP_Score", "Offense_Score", "Bullpen_Score",
             "Lineup_Score", "Situational_Score", "Strongest_Metric", "Profile", "Notes"
         ]
 
@@ -994,7 +1149,8 @@ with tab1:
         st.markdown('<div class="section-title">Full Matchup Comparison</div>', unsafe_allow_html=True)
         full_cols = [
             "Game_PK", "Game_Winner_Filter", "Team", "Opponent", "Home", "Starting_Pitcher",
-            "Win_Score", "Grade", "Moneyline_Display", "SP_Score", "Offense_Score",
+            "Win_Score", "Grade", "Model_Confidence", "Game_Score_Gap", "Why",
+            "Moneyline_Display", "SP_Score", "Offense_Score",
             "Bullpen_Score", "Lineup_Score", "Situational_Score", "Notes"
         ]
 
@@ -1038,5 +1194,5 @@ with tab4:
     st.dataframe(guide, use_container_width=True, hide_index=True)
 
     st.warning(
-        "This is the first real live engine. Next refinements should replace team pitching proxy with true bullpen data, add handedness splits, add last-14-day form, and connect optional Odds API."
+        "This version adds confidence and reason tags. Next refinements should replace team pitching proxy with true bullpen data, add handedness splits, add last-14-day form, and connect optional Odds API."
     )

@@ -1,45 +1,28 @@
-# Moneyline Winners — Streamlit App
+# Moneyline Winners — Streamlit App v3
 
-A Python/Streamlit MLB projected winners dashboard.
+This version adds optional odds display while keeping odds out of the prediction model.
 
-## Purpose
+## Important
 
-Ranks MLB teams by projected likelihood of winning based on baseball metrics only.
+Moneyline odds DO NOT affect:
+- Win Score
+- Rank
+- Grade
+- Suggested Status
 
-This app does NOT use:
-- Sportsbook odds
-- Implied probability
-- EV
-- Parlay logic
+Odds are only displayed so the user can decide whether the reward is worth betting.
 
-## Files
-
-- `app.py` — Streamlit app
-- `requirements.txt` — Python dependencies
-
-## Run Locally
+## Run
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Daily Workflow
+## Columns
 
-1. Open the app.
-2. Upload a CSV or edit the sample slate.
-3. Review the ranked projected winners board.
-4. Use A/B grades as the strongest projected winner shortlist.
-5. Export the ranked board.
-
-## Required CSV Columns
-
+Required:
 Game,Team,Opponent,Home,SP_Score,Offense_Score,Bullpen_Score,Lineup_Score,Situational_Score,Notes
 
-## Default Weights
-
-- Starting Pitcher: 40
-- Offense: 25
-- Bullpen: 15
-- Confirmed Lineup: 12
-- Situational: 8
+Optional:
+Moneyline

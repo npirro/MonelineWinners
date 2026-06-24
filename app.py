@@ -317,6 +317,31 @@ st.markdown("""
         overflow: hidden;
         box-shadow: 0 18px 38px rgba(0,0,0,.28);
     }
+
+    /* HARD OVERRIDE: KPI tile labels */
+    [data-testid="stMetric"] [data-testid="stMetricLabel"],
+    [data-testid="stMetric"] [data-testid="stMetricLabel"] *,
+    [data-testid="stMetric"] label,
+    [data-testid="stMetric"] label *,
+    [data-testid="stMetric"] p {
+        color: #bfdbfe !important;
+        opacity: 1 !important;
+        -webkit-text-fill-color: #bfdbfe !important;
+        font-weight: 950 !important;
+        text-transform: uppercase !important;
+        letter-spacing: .10em !important;
+        text-shadow: 0 2px 14px rgba(0,0,0,.65) !important;
+    }
+
+    [data-testid="stMetric"] [data-testid="stMetricValue"],
+    [data-testid="stMetric"] [data-testid="stMetricValue"] *,
+    [data-testid="stMetric"] div[data-testid="stMetricValue"] {
+        color: #ffffff !important;
+        opacity: 1 !important;
+        -webkit-text-fill-color: #ffffff !important;
+        font-weight: 950 !important;
+    }
+
 </style>
 """, unsafe_allow_html=True)
 

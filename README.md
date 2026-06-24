@@ -1,9 +1,10 @@
-# Moneyline Winners — Streamlit App v6
+# Moneyline Winners — Streamlit App v9
 
-Visual hotfix:
-- KPI labels now use the same bright readable blue as the projected winner card rank text.
-- No model logic changes.
-- Odds remain informational only.
+Hotfix on top of v8:
+- Restores bright white/light-blue KPI text on top tiles.
+- Keeps live MLB engine.
+- Keeps one-side-per-game suggested board.
+- Keeps odds informational only.
 
 Run:
 ```bash

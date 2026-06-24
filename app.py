@@ -48,12 +48,52 @@ st.markdown("""
     }
 
     [data-testid="stHeader"] {
-        background: rgba(5, 7, 13, 0.95) !important;
+        background: rgba(5, 7, 13, 0.96) !important;
     }
 
     [data-testid="stSidebar"] {
-        background: #090d16 !important;
-        border-right: 1px solid rgba(255,255,255,0.08);
+        background: linear-gradient(180deg, #070b13 0%, #0b1020 100%) !important;
+        border-right: 1px solid rgba(96,165,250,0.18);
+    }
+
+    [data-testid="stSidebar"] > div {
+        padding-top: 1.1rem;
+    }
+
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3,
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] span {
+        color: #f8fafc !important;
+    }
+
+    [data-testid="stSidebar"] .stCaptionContainer {
+        color: #cbd5e1 !important;
+        font-weight: 650;
+    }
+
+    [data-testid="stNumberInput"] {
+        background: linear-gradient(145deg, #0b1020, #111827);
+        border: 1px solid rgba(96,165,250,0.18);
+        border-radius: 18px;
+        padding: 12px 12px 10px;
+        box-shadow: 0 14px 30px rgba(0,0,0,.24);
+        margin-bottom: 12px;
+    }
+
+    [data-testid="stNumberInput"] label p {
+        color: #dbeafe !important;
+        font-weight: 850 !important;
+        font-size: .92rem !important;
+    }
+
+    [data-testid="stNumberInput"] input {
+        background: #ffffff !important;
+        color: #0f172a !important;
+        border-radius: 10px !important;
+        font-weight: 800 !important;
     }
 
     .block-container {
@@ -62,9 +102,9 @@ st.markdown("""
     }
 
     .hero-card {
-        background: radial-gradient(circle at top left, rgba(59,130,246,.28), transparent 32%),
+        background: radial-gradient(circle at top left, rgba(59,130,246,.32), transparent 34%),
                     linear-gradient(135deg, #0b1020 0%, #111827 55%, #172033 100%);
-        border: 1px solid rgba(255,255,255,0.11);
+        border: 1px solid rgba(96,165,250,0.22);
         border-radius: 26px;
         padding: 30px 34px;
         margin-bottom: 18px;
@@ -78,41 +118,48 @@ st.markdown("""
         color: #ffffff;
         margin: 0 0 10px 0;
         letter-spacing: -.04em;
+        text-shadow: 0 3px 22px rgba(0,0,0,.35);
     }
 
     .hero-subtitle {
-        color: #cbd5e1;
+        color: #e2e8f0;
         font-size: 1.08rem;
-        font-weight: 600;
+        font-weight: 750;
     }
 
     div[data-testid="stMetric"] {
-        background: linear-gradient(145deg, #0b1020, #111827);
-        border: 1px solid rgba(255,255,255,0.10);
-        padding: 18px 20px;
-        border-radius: 20px;
-        box-shadow: 0 14px 34px rgba(0,0,0,0.34);
+        background: linear-gradient(145deg, #0b1020 0%, #111827 70%, #151f32 100%);
+        border: 1px solid rgba(96,165,250,0.22);
+        border-left: 7px solid #3b82f6;
+        padding: 20px 22px;
+        border-radius: 22px;
+        box-shadow: 0 18px 38px rgba(0,0,0,0.34);
     }
 
     div[data-testid="stMetricLabel"] {
-        color: #cbd5e1 !important;
-        font-weight: 850 !important;
+        color: #dbeafe !important;
+        font-weight: 950 !important;
+        font-size: .9rem !important;
+        text-transform: uppercase;
+        letter-spacing: .06em;
     }
 
     div[data-testid="stMetricValue"] {
         color: #ffffff !important;
-        font-size: 2.2rem !important;
+        font-size: 2.3rem !important;
         font-weight: 950 !important;
+        text-shadow: 0 2px 18px rgba(0,0,0,.45);
     }
 
     .info-strip {
-        background: rgba(37,99,235,.15);
-        border: 1px solid rgba(96,165,250,.34);
-        color: #dbeafe;
+        background: rgba(37,99,235,.16);
+        border: 1px solid rgba(96,165,250,.38);
+        color: #eff6ff;
         border-radius: 18px;
         padding: 14px 17px;
         margin: 12px 0 20px 0;
-        font-weight: 750;
+        font-weight: 850;
+        box-shadow: 0 14px 30px rgba(0,0,0,.18);
     }
 
     .section-title {
@@ -125,7 +172,7 @@ st.markdown("""
 
     .team-card {
         background: linear-gradient(145deg, #0b1020 0%, #111827 70%, #151f32 100%);
-        border: 1px solid rgba(255,255,255,0.11);
+        border: 1px solid rgba(96,165,250,0.18);
         border-radius: 22px;
         padding: 19px 20px;
         min-height: 245px;
@@ -139,7 +186,7 @@ st.markdown("""
     .team-card-pass { border-left: 8px solid #ef4444; }
 
     .rank-line {
-        color: #93a4bd;
+        color: #bfdbfe;
         font-size: .78rem;
         font-weight: 950;
         text-transform: uppercase;
@@ -153,12 +200,13 @@ st.markdown("""
         font-weight: 950;
         line-height: 1;
         margin-bottom: 6px;
+        text-shadow: 0 3px 18px rgba(0,0,0,.38);
     }
 
     .matchup {
-        color: #cbd5e1;
+        color: #dbeafe;
         font-size: 1rem;
-        font-weight: 700;
+        font-weight: 800;
         margin-bottom: 16px;
     }
 
@@ -170,7 +218,7 @@ st.markdown("""
     }
 
     .score-label {
-        color: #93a4bd;
+        color: #bfdbfe;
         font-size: .75rem;
         font-weight: 950;
         text-transform: uppercase;
@@ -198,23 +246,25 @@ st.markdown("""
 
     .odds {
         color: #ffffff;
-        font-weight: 900;
+        font-weight: 950;
         margin-top: 12px;
         font-size: 1rem;
     }
 
     .odds-note {
-        color: #aab8cf;
+        color: #cbd5e1;
         font-size: .83rem;
         margin-top: 2px;
         line-height: 1.3;
+        font-weight: 650;
     }
 
     .footer-note {
-        color: #cbd5e1;
+        color: #dbeafe;
         font-size: .9rem;
         line-height: 1.38;
         margin-top: 13px;
+        font-weight: 650;
     }
 
     .footer-note b {
@@ -228,9 +278,9 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] {
         background: #0b1020;
         border-radius: 12px 12px 0 0;
-        color: #cbd5e1;
+        color: #dbeafe;
         font-weight: 850;
-        border: 1px solid rgba(255,255,255,.08);
+        border: 1px solid rgba(96,165,250,.18);
     }
 
     .stTabs [aria-selected="true"] {
@@ -240,9 +290,33 @@ st.markdown("""
     }
 
     [data-testid="stDataFrame"] {
-        border: 1px solid rgba(255,255,255,.10);
+        border: 1px solid rgba(96,165,250,.18);
         border-radius: 18px;
         overflow: hidden;
+        box-shadow: 0 18px 38px rgba(0,0,0,.28);
+    }
+
+    .sidebar-card {
+        background: linear-gradient(145deg, #0b1020, #111827);
+        border: 1px solid rgba(96,165,250,0.20);
+        border-radius: 20px;
+        padding: 16px 16px;
+        margin: 10px 0 18px;
+        box-shadow: 0 15px 32px rgba(0,0,0,.25);
+    }
+
+    .sidebar-card-title {
+        color: #ffffff;
+        font-size: 1.05rem;
+        font-weight: 950;
+        margin-bottom: 7px;
+    }
+
+    .sidebar-card-text {
+        color: #cbd5e1;
+        font-size: .9rem;
+        line-height: 1.35;
+        font-weight: 650;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -479,8 +553,14 @@ st.markdown("""
 
 
 with st.sidebar:
-    st.header("Scoring Weights")
-    st.caption("Projected win likelihood only. Odds do not affect these scores.")
+    st.markdown("""
+    <div class="sidebar-card">
+        <div class="sidebar-card-title">Scoring Weights</div>
+        <div class="sidebar-card-text">
+            Projected win likelihood only. Odds do not affect these scores.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     weights = {
         "SP_Score": st.number_input("Starting Pitcher", min_value=0, max_value=100, value=DEFAULT_WEIGHTS["SP_Score"]),
@@ -490,12 +570,17 @@ with st.sidebar:
         "Situational_Score": st.number_input("Situational", min_value=0, max_value=100, value=DEFAULT_WEIGHTS["Situational_Score"]),
     }
 
-    st.divider()
-    st.header("Decision Rules")
-    st.write("**85+** = A — Core projected winner")
-    st.write("**78-84** = B — Playable")
-    st.write("**70-77** = C — Thin")
-    st.write("**<70** = Pass")
+    st.markdown("""
+    <div class="sidebar-card">
+        <div class="sidebar-card-title">Decision Rules</div>
+        <div class="sidebar-card-text">
+            <b>85+</b> = A — Core projected winner<br>
+            <b>78-84</b> = B — Playable<br>
+            <b>70-77</b> = C — Thin<br>
+            <b>&lt;70</b> = Pass
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 tab1, tab2, tab3 = st.tabs(["Dashboard", "Data Input", "Metric Guide"])

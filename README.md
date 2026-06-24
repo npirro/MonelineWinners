@@ -1,9 +1,10 @@
-# Moneyline Winners — Streamlit App v4
+# Moneyline Winners — Streamlit App v5
 
-Fixes:
-- Forces dark theme on Streamlit Cloud.
-- Fixes raw HTML showing on the page by rendering cards one-by-one in Streamlit columns.
-- Keeps odds informational only.
+Visual polish update:
+- Brighter KPI tile labels
+- KPI tiles styled closer to the winner cards
+- Sidebar scoring weights redesigned to match the card aesthetic
+- Same v4 logic and odds remain informational only
 
 Run:
 ```bash

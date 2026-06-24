@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Moneyline Winners</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Moneyline Winners</h1>
+      <p>MLB projected winner rankings based on game metrics only. No odds. No EV. No parlays.</p>
+    </div>
+    <div class="topActions">
+      <button id="loadSampleBtn">Load Sample</button>
+      <button id="exportBtn" class="secondary">Export Board</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel full statsGrid">
+      <div>
+        <span class="label">Teams Ranked</span>
+        <strong id="statTeams">0</strong>
+      </div>
+      <div>
+        <span class="label">A-Grade Teams</span>
+        <strong id="statA">0</strong>
+      </div>
+      <div>
+        <span class="label">Top Score</span>
+        <strong id="statTop">—</strong>
+      </div>
+      <div>
+        <span class="label">Slate Status</span>
+        <strong id="statStatus">Waiting</strong>
+      </div>
+    </section>
+
+    <section class="panel controls">
+      <h2>Refresh Data</h2>
+      <p class="small">Paste CSV or upload a CSV file using this exact column order.</p>
+      <pre class="columns">Game,Team,Opponent,Home,SP_Score,Offense_Score,Bullpen_Score,Lineup_Score,Situational_Score,Notes</pre>
+
+      <input id="fileInput" type="file" accept=".csv,text/csv" />
+      <textarea id="csvInput" placeholder="Paste today's team rows here..."></textarea>
+
+      <div class="buttonRow">
+        <button id="refreshBtn">Refresh Rankings</button>
+        <button id="clearBtn" class="secondary">Clear</button>
+      </div>
+
+      <div id="validationBox" class="validation">No data loaded yet.</div>
+    </section>
+
+    <section class="panel">
+      <h2>Metric Weights</h2>
+      <div class="weights">
+        <label>Starting Pitcher <input id="wSP" type="number" value="40"></label>
+        <label>Offense <input id="wOff" type="number" value="25"></label>
+        <label>Bullpen <input id="wBP" type="number" value="15"></label>
+        <label>Confirmed Lineup <input id="wLU" type="number" value="12"></label>
+        <label>Situational <input id="wSit" type="number" value="8"></label>
+      </div>
+      <button id="resetWeightsBtn" class="secondary wide">Reset Weights</button>
+
+      <h2 class="spaced">Scoring Model</h2>
+      <p class="small">Each category is scored 0-100. The dashboard calculates a weighted projected win score.</p>
+    </section>
+
+    <section class="panel full">
+      <div class="sectionHead">
+        <h2>Projected Winners Board</h2>
+        <span id="statusPill" class="pill">Waiting for data</span>
+      </div>
+      <div class="tableWrap">
+        <table id="rankTable">
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Team</th>
+              <th>Opponent</th>
+              <th>Home</th>
+              <th>Win Score</th>
+              <th>Grade</th>
+              <th>Strongest Metric</th>
+              <th>Profile</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel full">
+      <h2>Decision Rules</h2>
+      <div class="rules">
+        <div><b>85+</b><span>A — Core projected winner</span></div>
+        <div><b>78-84</b><span>B — Playable winner candidate</span></div>
+        <div><b>70-77</b><span>C — Thin / watchlist only</span></div>
+        <div><b>&lt;70</b><span>Pass</span></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

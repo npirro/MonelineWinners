@@ -767,155 +767,172 @@ def build_live_board(slate_date):
 
 
 
-def build_reason_tags(row, opponent_row=None):
-    reasons = []
 
-    if row.get("SP_Score", 0) >= 85:
-        reasons.append("Elite SP")
-    elif row.get("SP_Score", 0) >= 78:
-        reasons.append("SP Edge")
-
-    if row.get("Offense_Score", 0) >= 85:
-        reasons.append("Elite Offense")
-    elif row.get("Offense_Score", 0) >= 78:
-        reasons.append("Offense Edge")
-
-    if row.get("Bullpen_Score", 0) >= 85:
-        reasons.append("Pitching Edge")
-    elif row.get("Bullpen_Score", 0) >= 78:
-        reasons.append("Solid Pitching")
-
-    if row.get("Lineup_Score", 0) >= 82:
-        reasons.append("Lineup Edge")
-
-    if str(row.get("Home", "")).lower() in ["yes", "true", "1", "home"]:
-        reasons.append("Home Field")
-
-    if opponent_row is not None:
-        sp_gap = row.get("SP_Score", 0) - opponent_row.get("SP_Score", 0)
-        off_gap = row.get("Offense_Score", 0) - opponent_row.get("Offense_Score", 0)
-        pen_gap = row.get("Bullpen_Score", 0) - opponent_row.get("Bullpen_Score", 0)
-        lu_gap = row.get("Lineup_Score", 0) - opponent_row.get("Lineup_Score", 0)
-
-        if sp_gap >= 8:
-            reasons.append("SP Mismatch")
-        if off_gap >= 8:
-            reasons.append("Offense Mismatch")
-        if pen_gap >= 8:
-            reasons.append("Bullpen Mismatch")
-        if lu_gap >= 8:
-            reasons.append("Lineup Mismatch")
-
-    if not reasons:
-        reasons.append("Balanced Edge")
-
-    return " | ".join(reasons[:6])
-
-
-def confidence_from_gap(win_score, score_gap):
+def logistic_probability(edge, scale=12.0):
     """
-    Confidence is not a true win probability yet.
-    It is a model-confidence rating based on team strength plus gap over opponent.
+    Converts matchup edge into projected win probability.
+    First-pass calibration curve. Backtesting/calibration comes next.
     """
-    base = 50
-    base += max(0, win_score - 70) * 1.15
-    base += max(0, score_gap) * 1.85
-
-    if win_score >= 85:
-        base += 5
-    elif win_score >= 78:
-        base += 2
-
-    if score_gap < 3:
-        base -= 8
-    elif score_gap >= 10:
-        base += 5
-
-    return round(clamp(base, 35, 96), 1)
+    try:
+        edge = float(edge)
+    except Exception:
+        edge = 0
+    prob = 1 / (1 + math.exp(-edge / scale))
+    return round(clamp(prob * 100, 35, 88), 1)
 
 
-def confidence_label(confidence, gap):
-    if confidence >= 88 and gap >= 7:
-        return "High Confidence"
-    if confidence >= 78 and gap >= 4:
-        return "Medium-High Confidence"
-    if confidence >= 68:
-        return "Medium Confidence"
-    return "Low Confidence"
+def grade_probability(win_prob):
+    if win_prob >= 70:
+        return "A"
+    if win_prob >= 62:
+        return "B"
+    if win_prob >= 55:
+        return "C"
+    return "Pass"
 
 
-def enhanced_status(row):
-    grade = row.get("Grade", "Pass")
-    confidence = row.get("Model_Confidence", 0)
-    gap = row.get("Game_Score_Gap", 0)
-
-    if grade == "A" and confidence >= 85 and gap >= 6:
+def probability_status(win_prob, edge):
+    if win_prob >= 70 and edge >= 10:
         return "A — Core projected winner"
-    if grade in ["A", "B"] and confidence >= 76 and gap >= 4:
+    if win_prob >= 62 and edge >= 5:
         return "B — Playable winner candidate"
-    if grade in ["A", "B", "C"] and gap >= 2:
+    if win_prob >= 55 and edge >= 2:
         return "C — Thin / watchlist only"
     return "Pass / No strong separation"
 
 
-def apply_one_side_per_game(board):
+def build_matchup_reasons(row, opponent_row):
+    reasons = []
+
+    sp_adv = row.get("SP_Advantage", 0)
+    off_adv = row.get("Offense_Advantage", 0)
+    pen_adv = row.get("Bullpen_Advantage", 0)
+    lu_adv = row.get("Lineup_Advantage", 0)
+    sit_adv = row.get("Situational_Advantage", 0)
+
+    if sp_adv >= 8:
+        reasons.append("Major SP Edge")
+    elif sp_adv >= 4:
+        reasons.append("SP Edge")
+
+    if off_adv >= 8:
+        reasons.append("Major Offense Edge")
+    elif off_adv >= 4:
+        reasons.append("Offense Edge")
+
+    if pen_adv >= 7:
+        reasons.append("Pitching/Bullpen Edge")
+    elif pen_adv >= 3:
+        reasons.append("Slight Pitching Edge")
+
+    if lu_adv >= 6:
+        reasons.append("Lineup Edge")
+    elif lu_adv >= 3:
+        reasons.append("Slight Lineup Edge")
+
+    if sit_adv >= 3:
+        reasons.append("Home/Situational Edge")
+
+    if row.get("Projected_Win_Prob", 0) >= 70:
+        reasons.append("High Win Projection")
+
+    if not reasons:
+        reasons.append("Small Matchup Edge")
+
+    return " | ".join(reasons[:6])
+
+
+def apply_phase2_matchup_engine(board):
     """
-    Keeps only the highest-rated team from each MLB game as a suggested side.
-    Adds matchup gap, confidence, and reason tags.
+    Converts raw team category scores into head-to-head matchup advantages.
+    Produces Projected Win Probability and keeps only one suggested side per game.
     """
     board = board.copy()
 
     if "Game_PK" not in board.columns:
+        board["Matchup_Edge"] = 0
+        board["Projected_Win_Prob"] = board["Win_Score"].apply(lambda x: logistic_probability((x - 50) / 2))
+        board["Grade"] = board["Projected_Win_Prob"].apply(grade_probability)
+        board["Suggested_Status"] = board.apply(lambda r: probability_status(r["Projected_Win_Prob"], r["Matchup_Edge"]), axis=1)
         board["Suggested_Side"] = True
         board["Game_Winner_Filter"] = "Suggested Side"
-        board["Game_Score_Gap"] = 0
-        board["Model_Confidence"] = board["Win_Score"].apply(lambda x: confidence_from_gap(x, 0))
-        board["Confidence_Label"] = board.apply(lambda r: confidence_label(r["Model_Confidence"], r["Game_Score_Gap"]), axis=1)
-        board["Why"] = board.apply(lambda r: build_reason_tags(r), axis=1)
-        board["Suggested_Status"] = board.apply(enhanced_status, axis=1)
+        board["Why"] = "No matchup comparison available"
         return board, board
 
     enhanced_rows = []
 
+    edge_weights = {
+        "SP_Score": 0.42,
+        "Offense_Score": 0.26,
+        "Bullpen_Score": 0.16,
+        "Lineup_Score": 0.10,
+        "Situational_Score": 0.06,
+    }
+
     for game_pk, group in board.groupby("Game_PK"):
         group = group.sort_values("Win_Score", ascending=False).copy()
+
         if len(group) == 1:
             row = group.iloc[0].copy()
-            row["Game_Score_Gap"] = 0
+            for col in ["SP_Advantage", "Offense_Advantage", "Bullpen_Advantage", "Lineup_Advantage", "Situational_Advantage"]:
+                row[col] = 0
+            row["Matchup_Edge"] = 0
+            row["Projected_Win_Prob"] = 50
+            row["Grade"] = grade_probability(row["Projected_Win_Prob"])
+            row["Suggested_Status"] = probability_status(row["Projected_Win_Prob"], row["Matchup_Edge"])
             row["Suggested_Side"] = True
             row["Game_Winner_Filter"] = "Suggested Side"
-            row["Model_Confidence"] = confidence_from_gap(row["Win_Score"], 0)
-            row["Confidence_Label"] = confidence_label(row["Model_Confidence"], row["Game_Score_Gap"])
-            row["Why"] = build_reason_tags(row)
-            row["Suggested_Status"] = enhanced_status(row)
+            row["Why"] = "No matchup comparison available"
             enhanced_rows.append(row)
             continue
 
-        top = group.iloc[0].copy()
-        second = group.iloc[1].copy()
+        rows = [group.iloc[0].copy(), group.iloc[1].copy()]
 
-        for idx, row in group.iterrows():
-            row = row.copy()
-            opponent = second if row.name == top.name else top
-            gap = row["Win_Score"] - opponent["Win_Score"]
+        for i, row in enumerate(rows):
+            opponent = rows[1 - i]
 
-            row["Game_Score_Gap"] = round(gap, 1)
-            row["Suggested_Side"] = row.name == top.name
-            row["Game_Winner_Filter"] = "Suggested Side" if row["Suggested_Side"] else "Opponent Side / Not Suggested"
-            row["Model_Confidence"] = confidence_from_gap(row["Win_Score"], max(gap, 0))
-            row["Confidence_Label"] = confidence_label(row["Model_Confidence"], max(gap, 0))
-            row["Why"] = build_reason_tags(row, opponent)
-            row["Suggested_Status"] = enhanced_status(row)
+            sp_adv = row["SP_Score"] - opponent["SP_Score"]
+            off_adv = row["Offense_Score"] - opponent["Offense_Score"]
+            pen_adv = row["Bullpen_Score"] - opponent["Bullpen_Score"]
+            lu_adv = row["Lineup_Score"] - opponent["Lineup_Score"]
+            sit_adv = row["Situational_Score"] - opponent["Situational_Score"]
+
+            matchup_edge = (
+                sp_adv * edge_weights["SP_Score"] +
+                off_adv * edge_weights["Offense_Score"] +
+                pen_adv * edge_weights["Bullpen_Score"] +
+                lu_adv * edge_weights["Lineup_Score"] +
+                sit_adv * edge_weights["Situational_Score"]
+            )
+
+            row["SP_Advantage"] = round(sp_adv, 1)
+            row["Offense_Advantage"] = round(off_adv, 1)
+            row["Bullpen_Advantage"] = round(pen_adv, 1)
+            row["Lineup_Advantage"] = round(lu_adv, 1)
+            row["Situational_Advantage"] = round(sit_adv, 1)
+            row["Matchup_Edge"] = round(matchup_edge, 1)
+            row["Projected_Win_Prob"] = logistic_probability(matchup_edge)
+            row["Grade"] = grade_probability(row["Projected_Win_Prob"])
+            row["Suggested_Status"] = probability_status(row["Projected_Win_Prob"], matchup_edge)
+            row["Why"] = build_matchup_reasons(row, opponent)
 
             enhanced_rows.append(row)
 
     full = pd.DataFrame(enhanced_rows)
-    suggested = full[full["Suggested_Side"]].copy()
 
-    suggested = suggested.sort_values(["Model_Confidence", "Win_Score"], ascending=False).reset_index(drop=True)
+    full["Suggested_Side"] = full.groupby("Game_PK")["Projected_Win_Prob"].rank(
+        method="first", ascending=False
+    ) == 1
+
+    full["Game_Winner_Filter"] = full["Suggested_Side"].apply(
+        lambda x: "Suggested Side" if x else "Opponent Side / Not Suggested"
+    )
+
+    suggested = full[full["Suggested_Side"]].copy()
+    suggested = suggested.sort_values(["Projected_Win_Prob", "Matchup_Edge", "Win_Score"], ascending=False).reset_index(drop=True)
     suggested["Rank"] = suggested.index + 1
 
-    full = full.sort_values(["Game_PK", "Suggested_Side", "Win_Score"], ascending=[True, False, False]).reset_index(drop=True)
+    full = full.sort_values(["Game_PK", "Suggested_Side", "Projected_Win_Prob"], ascending=[True, False, False]).reset_index(drop=True)
     return suggested, full
 
 
@@ -946,8 +963,8 @@ def render_card(row):
             </div>
             <div class="grade-pill pill-{cls}">{g}</div>
         </div>
-        <div class="confidence-line">Confidence: {row.get("Model_Confidence", "—")}%</div>
-        <div class="confidence-note">{safe_text(row.get("Confidence_Label", ""))} · Gap: {row.get("Game_Score_Gap", "—")}</div>
+        <div class="confidence-line">Projected Win: {row.get("Projected_Win_Prob", "—")}%</div>
+        <div class="confidence-note">Matchup Edge: {row.get("Matchup_Edge", "—")} · ranked by win probability</div>
         <div class="odds">Odds: {ml}</div>
         <div class="odds-note">{reward} · odds do not affect rank</div>
         <div style="margin-top:10px;">{reason_html}</div>
@@ -986,7 +1003,7 @@ st.markdown("""
 <div class="hero-card">
     <div class="hero-title">⚾ Moneyline Winners</div>
     <div class="hero-subtitle">
-        Live MLB projected winner engine with confidence ratings, matchup gaps, and one suggested side per game.
+        Phase 2 head-to-head engine: projected win probability, matchup edges, and one suggested side per game.
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -1099,24 +1116,24 @@ with tab1:
         st.error("No MLB games loaded. Try Refresh Live MLB Data.")
     else:
         raw_board = score_board(df, weights)
-        suggested_board, full_board = apply_one_side_per_game(raw_board)
+        suggested_board, full_board = apply_phase2_matchup_engine(raw_board)
 
         a_count = int((suggested_board["Grade"] == "A").sum())
         b_count = int((suggested_board["Grade"] == "B").sum())
-        top_score = suggested_board["Win_Score"].max() if len(suggested_board) else 0
+        top_score = suggested_board["Projected_Win_Prob"].max() if len(suggested_board) else 0
         confirmed_lineups = int(raw_board["Notes"].str.contains("Confirmed lineup", na=False).sum())
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Games Ranked", len(suggested_board))
         m2.metric("A-Grade Sides", a_count)
         m3.metric("B-Grade Sides", b_count)
-        m4.metric("Top Score", top_score)
+        m4.metric("Top Win %", top_score)
 
         st.caption(f"Last refresh: {st.session_state.get('last_refresh', 'Not refreshed yet')}")
 
         st.markdown("""
         <div class="info-strip">
-            One-side-per-game rule is active: the suggested board only shows the highest-rated team from each matchup.
+            Phase 2 engine active: the suggested board ranks one side per game by Projected Win Probability.
         </div>
         """, unsafe_allow_html=True)
 
@@ -1128,16 +1145,18 @@ with tab1:
             </div>
             """, unsafe_allow_html=True)
 
-        st.markdown('<div class="section-title">Top Projected Winners</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">Top Projected Win Probabilities</div>', unsafe_allow_html=True)
         render_team_tiles(suggested_board, max_cards=8)
 
         st.markdown('<div class="section-title">Suggested Winners Board</div>', unsafe_allow_html=True)
         suggested_cols = [
-            "Rank", "Team", "Opponent", "Home", "Starting_Pitcher", "Win_Score", "Grade",
-            "Model_Confidence", "Confidence_Label", "Game_Score_Gap", "Suggested_Status", "Why",
+            "Rank", "Team", "Opponent", "Home", "Starting_Pitcher",
+            "Projected_Win_Prob", "Matchup_Edge", "Grade", "Suggested_Status", "Why",
             "Moneyline_Display", "Implied_Probability", "Reward_View",
+            "SP_Advantage", "Offense_Advantage", "Bullpen_Advantage",
+            "Lineup_Advantage", "Situational_Advantage",
             "SP_Score", "Offense_Score", "Bullpen_Score",
-            "Lineup_Score", "Situational_Score", "Strongest_Metric", "Profile", "Notes"
+            "Lineup_Score", "Situational_Score", "Notes"
         ]
 
         st.dataframe(
@@ -1149,9 +1168,10 @@ with tab1:
         st.markdown('<div class="section-title">Full Matchup Comparison</div>', unsafe_allow_html=True)
         full_cols = [
             "Game_PK", "Game_Winner_Filter", "Team", "Opponent", "Home", "Starting_Pitcher",
-            "Win_Score", "Grade", "Model_Confidence", "Game_Score_Gap", "Why",
-            "Moneyline_Display", "SP_Score", "Offense_Score",
-            "Bullpen_Score", "Lineup_Score", "Situational_Score", "Notes"
+            "Projected_Win_Prob", "Matchup_Edge", "Grade", "Why",
+            "Moneyline_Display", "SP_Advantage", "Offense_Advantage", "Bullpen_Advantage",
+            "Lineup_Advantage", "Situational_Advantage",
+            "SP_Score", "Offense_Score", "Bullpen_Score", "Lineup_Score", "Situational_Score", "Notes"
         ]
 
         st.dataframe(
@@ -1194,5 +1214,5 @@ with tab4:
     st.dataframe(guide, use_container_width=True, hide_index=True)
 
     st.warning(
-        "This version adds confidence and reason tags. Next refinements should replace team pitching proxy with true bullpen data, add handedness splits, add last-14-day form, and connect optional Odds API."
+        "This Phase 2 version ranks by projected win probability from head-to-head matchup advantages. Next refinements should backtest/calibrate the probability curve, replace team pitching proxy with true bullpen data, add handedness splits, add last-14-day form, and connect optional Odds API."
     )

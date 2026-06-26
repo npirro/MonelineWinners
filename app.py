@@ -1,1218 +1,837 @@
+import os
+import re
+from collections import defaultdict, deque
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
-import streamlit as st
+import joblib
+import numpy as np
 import pandas as pd
 import requests
-from datetime import date, datetime
-import math
-import time
+import streamlit as st
+
+
+# =========================
+# App Config
+# =========================
 
 st.set_page_config(
-    page_title="Moneyline Winners",
+    page_title="Moneyline Winners v1.0",
     page_icon="⚾",
     layout="wide",
-    initial_sidebar_state="expanded"
 )
 
 MLB_BASE = "https://statsapi.mlb.com/api/v1"
+MODEL_PATH = Path("model_artifacts/mlb_logistic_model.joblib")
 
-DEFAULT_WEIGHTS = {
-    "SP_Score": 40,
-    "Offense_Score": 25,
-    "Bullpen_Score": 15,
-    "Lineup_Score": 12,
-    "Situational_Score": 8
-}
-
-ENGINE_COLUMNS = [
-    "Game", "Team", "Opponent", "Home", "Team_ID", "Opponent_ID", "Game_PK",
-    "Starting_Pitcher", "SP_Score", "Offense_Score", "Bullpen_Score",
-    "Lineup_Score", "Situational_Score", "Moneyline", "Notes"
+DEFAULT_FEATURES = [
+    "win_pct_diff",
+    "rpg_diff",
+    "rapg_diff",
+    "run_diff_per_game_diff",
+    "recent_win_pct_diff",
+    "recent_rpg_diff",
+    "recent_rapg_diff",
+    "home_field",
 ]
 
-st.markdown("""
-<style>
-    html, body, [data-testid="stAppViewContainer"] {
-        background: #05070d !important;
-        color: #f8fafc !important;
-    }
-
-    [data-testid="stHeader"] {
-        background: rgba(5, 7, 13, 0.96) !important;
-    }
-
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #070b13 0%, #0b1020 100%) !important;
-        border-right: 1px solid rgba(96,165,250,0.18);
-    }
-
-    [data-testid="stSidebar"] > div { padding-top: 1.1rem; }
-
-    [data-testid="stSidebar"] h1,
-    [data-testid="stSidebar"] h2,
-    [data-testid="stSidebar"] h3,
-    [data-testid="stSidebar"] p,
-    [data-testid="stSidebar"] label,
-    [data-testid="stSidebar"] span {
-        color: #f8fafc !important;
-    }
-
-    [data-testid="stNumberInput"],
-    [data-testid="stDateInput"] {
-        background: linear-gradient(145deg, #0b1020, #111827);
-        border: 1px solid rgba(96,165,250,0.18);
-        border-radius: 18px;
-        padding: 12px 12px 10px;
-        box-shadow: 0 14px 30px rgba(0,0,0,.24);
-        margin-bottom: 12px;
-    }
-
-    [data-testid="stNumberInput"] label p,
-    [data-testid="stDateInput"] label p {
-        color: #dbeafe !important;
-        font-weight: 850 !important;
-        font-size: .92rem !important;
-    }
-
-    [data-testid="stNumberInput"] input {
-        background: #ffffff !important;
-        color: #0f172a !important;
-        border-radius: 10px !important;
-        font-weight: 800 !important;
-    }
-
-    .block-container {
-        padding-top: 1.4rem;
-        max-width: 1550px;
-    }
-
-    .hero-card {
-        background: radial-gradient(circle at top left, rgba(59,130,246,.32), transparent 34%),
-                    linear-gradient(135deg, #0b1020 0%, #111827 55%, #172033 100%);
-        border: 1px solid rgba(96,165,250,0.22);
-        border-radius: 26px;
-        padding: 30px 34px;
-        margin-bottom: 18px;
-        box-shadow: 0 22px 55px rgba(0,0,0,.42);
-    }
-
-    .hero-title {
-        font-size: 3.15rem;
-        line-height: 1;
-        font-weight: 950;
-        color: #ffffff;
-        margin: 0 0 10px 0;
-        letter-spacing: -.04em;
-        text-shadow: 0 3px 22px rgba(0,0,0,.35);
-    }
-
-    .hero-subtitle {
-        color: #e2e8f0;
-        font-size: 1.08rem;
-        font-weight: 750;
-    }
-
-    div[data-testid="stMetric"] {
-        background: linear-gradient(145deg, #0b1020 0%, #111827 70%, #151f32 100%);
-        border: 1px solid rgba(96,165,250,0.22);
-        border-left: 7px solid #3b82f6;
-        padding: 20px 22px;
-        border-radius: 22px;
-        box-shadow: 0 18px 38px rgba(0,0,0,0.34);
-    }
-
-    div[data-testid="stMetricLabel"],
-    div[data-testid="stMetricLabel"] p,
-    div[data-testid="stMetricLabel"] span {
-        color: #bfdbfe !important;
-        opacity: 1 !important;
-        font-weight: 950 !important;
-        font-size: .88rem !important;
-        text-transform: uppercase !important;
-        letter-spacing: .11em !important;
-        text-shadow: 0 2px 14px rgba(0,0,0,.55);
-    }
-
-    div[data-testid="stMetricValue"] {
-        color: #ffffff !important;
-        font-size: 2.3rem !important;
-        font-weight: 950 !important;
-        text-shadow: 0 2px 18px rgba(0,0,0,.45);
-    }
-
-    .info-strip {
-        background: rgba(37,99,235,.16);
-        border: 1px solid rgba(96,165,250,.38);
-        color: #eff6ff;
-        border-radius: 18px;
-        padding: 14px 17px;
-        margin: 12px 0 20px 0;
-        font-weight: 850;
-        box-shadow: 0 14px 30px rgba(0,0,0,.18);
-    }
-
-    .warning-strip {
-        background: rgba(245,158,11,.14);
-        border: 1px solid rgba(245,158,11,.34);
-        color: #fde68a;
-        border-radius: 18px;
-        padding: 14px 17px;
-        margin: 12px 0 20px 0;
-        font-weight: 800;
-    }
-
-    .section-title {
-        font-size: 1.65rem;
-        font-weight: 950;
-        color: #ffffff;
-        margin: 24px 0 12px 0;
-        letter-spacing: -.02em;
-    }
-
-    .team-card {
-        background: linear-gradient(145deg, #0b1020 0%, #111827 70%, #151f32 100%);
-        border: 1px solid rgba(96,165,250,0.18);
-        border-radius: 22px;
-        padding: 19px 20px;
-        min-height: 265px;
-        box-shadow: 0 18px 38px rgba(0,0,0,0.34);
-        margin-bottom: 16px;
-    }
-
-    .team-card-a { border-left: 8px solid #22c55e; }
-    .team-card-b { border-left: 8px solid #3b82f6; }
-    .team-card-c { border-left: 8px solid #f59e0b; }
-    .team-card-pass { border-left: 8px solid #ef4444; }
-
-    .rank-line {
-        color: #bfdbfe;
-        font-size: .78rem;
-        font-weight: 950;
-        text-transform: uppercase;
-        letter-spacing: .11em;
-        margin-bottom: 12px;
-    }
-
-    .team-name {
-        color: #ffffff;
-        font-size: 2.2rem;
-        font-weight: 950;
-        line-height: 1;
-        margin-bottom: 6px;
-        text-shadow: 0 3px 18px rgba(0,0,0,.38);
-    }
-
-    .matchup {
-        color: #dbeafe;
-        font-size: 1rem;
-        font-weight: 800;
-        margin-bottom: 8px;
-    }
-
-    .pitcher {
-        color: #cbd5e1;
-        font-size: .87rem;
-        font-weight: 700;
-        margin-bottom: 14px;
-    }
-
-    .score-flex {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin: 12px 0;
-    }
-
-    .score-label {
-        color: #bfdbfe;
-        font-size: .75rem;
-        font-weight: 950;
-        text-transform: uppercase;
-        letter-spacing: .08em;
-    }
-
-    .win-score {
-        color: #ffffff;
-        font-size: 2.35rem;
-        font-weight: 950;
-        line-height: 1;
-    }
-
-    .grade-pill {
-        border-radius: 999px;
-        padding: 8px 14px;
-        font-weight: 950;
-        font-size: .9rem;
-    }
-
-    .pill-a { background: rgba(34,197,94,.2); color: #86efac; border: 1px solid rgba(34,197,94,.35); }
-    .pill-b { background: rgba(59,130,246,.2); color: #bfdbfe; border: 1px solid rgba(59,130,246,.35); }
-    .pill-c { background: rgba(245,158,11,.2); color: #fde68a; border: 1px solid rgba(245,158,11,.35); }
-    .pill-pass { background: rgba(239,68,68,.2); color: #fecaca; border: 1px solid rgba(239,68,68,.35); }
-
-    .odds {
-        color: #ffffff;
-        font-weight: 950;
-        margin-top: 12px;
-        font-size: 1rem;
-    }
-
-    .odds-note {
-        color: #cbd5e1;
-        font-size: .83rem;
-        margin-top: 2px;
-        line-height: 1.3;
-        font-weight: 650;
-    }
-
-    .footer-note {
-        color: #dbeafe;
-        font-size: .9rem;
-        line-height: 1.38;
-        margin-top: 13px;
-        font-weight: 650;
-    }
-
-    .footer-note b { color: #ffffff; }
-
-    .sidebar-card {
-        background: linear-gradient(145deg, #0b1020, #111827);
-        border: 1px solid rgba(96,165,250,0.20);
-        border-radius: 20px;
-        padding: 16px 16px;
-        margin: 10px 0 18px;
-        box-shadow: 0 15px 32px rgba(0,0,0,.25);
-    }
-
-    .sidebar-card-title {
-        color: #ffffff;
-        font-size: 1.05rem;
-        font-weight: 950;
-        margin-bottom: 7px;
-    }
-
-    .sidebar-card-text {
-        color: #cbd5e1;
-        font-size: .9rem;
-        line-height: 1.35;
-        font-weight: 650;
-    }
-
-    .stTabs [data-baseweb="tab"] {
-        background: #0b1020;
-        border-radius: 12px 12px 0 0;
-        color: #dbeafe;
-        font-weight: 850;
-        border: 1px solid rgba(96,165,250,.18);
-    }
-
-    .stTabs [aria-selected="true"] {
-        color: #ffffff !important;
-        background: #172033 !important;
-        border-bottom: 2px solid #60a5fa !important;
-    }
-
-    [data-testid="stDataFrame"] {
-        border: 1px solid rgba(96,165,250,.18);
-        border-radius: 18px;
-        overflow: hidden;
-        box-shadow: 0 18px 38px rgba(0,0,0,.28);
-    }
-
-    /* HARD OVERRIDE: KPI tile labels */
-    [data-testid="stMetric"] [data-testid="stMetricLabel"],
-    [data-testid="stMetric"] [data-testid="stMetricLabel"] *,
-    [data-testid="stMetric"] label,
-    [data-testid="stMetric"] label *,
-    [data-testid="stMetric"] p {
-        color: #bfdbfe !important;
-        opacity: 1 !important;
-        -webkit-text-fill-color: #bfdbfe !important;
-        font-weight: 950 !important;
-        text-transform: uppercase !important;
-        letter-spacing: .10em !important;
-        text-shadow: 0 2px 14px rgba(0,0,0,.65) !important;
-    }
-
-    [data-testid="stMetric"] [data-testid="stMetricValue"],
-    [data-testid="stMetric"] [data-testid="stMetricValue"] *,
-    [data-testid="stMetric"] div[data-testid="stMetricValue"] {
-        color: #ffffff !important;
-        opacity: 1 !important;
-        -webkit-text-fill-color: #ffffff !important;
-        font-weight: 950 !important;
-    }
+FINAL_STATES = {"Final", "Game Over", "Completed Early"}
 
 
-    .reason-chip {
-        display: inline-block;
-        background: rgba(96,165,250,.14);
-        border: 1px solid rgba(96,165,250,.28);
-        color: #dbeafe;
-        border-radius: 999px;
-        padding: 4px 8px;
-        font-size: .72rem;
-        font-weight: 850;
-        margin: 3px 4px 0 0;
-        white-space: nowrap;
-    }
+# =========================
+# Styling
+# =========================
 
-    .confidence-line {
-        color: #ffffff;
-        font-weight: 950;
-        margin-top: 8px;
-        font-size: 1rem;
-    }
+st.markdown(
+    """
+    <style>
+        .stApp {
+            background-color: #07111f;
+            color: #eaf2ff;
+        }
 
-    .confidence-note {
-        color: #bfdbfe;
-        font-size: .8rem;
-        font-weight: 750;
-        margin-top: 2px;
-    }
+        h1, h2, h3 {
+            color: #eaf2ff;
+        }
 
-</style>
-""", unsafe_allow_html=True)
+        .block-container {
+            padding-top: 2rem;
+        }
+
+        .metric-card {
+            background: linear-gradient(135deg, #0d1b2e, #102944);
+            border: 1px solid #1f456e;
+            border-radius: 18px;
+            padding: 18px;
+            margin-bottom: 12px;
+            box-shadow: 0 0 18px rgba(0,0,0,0.25);
+        }
+
+        .big-number {
+            font-size: 34px;
+            font-weight: 800;
+            color: #8fd3ff;
+        }
+
+        .small-label {
+            font-size: 13px;
+            color: #b8c7d9;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .tier-a {
+            color: #7CFFB2;
+            font-weight: 800;
+        }
+
+        .tier-b {
+            color: #FFE27A;
+            font-weight: 800;
+        }
+
+        .pass {
+            color: #ff9b9b;
+            font-weight: 800;
+        }
+
+        div[data-testid="stDataFrame"] {
+            background-color: #0d1b2e;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
-def clamp(x, low=0, high=100):
-    try:
-        return max(low, min(high, float(x)))
-    except Exception:
-        return 50
+# =========================
+# Helpers
+# =========================
 
-
-def safe_float(x, default=0):
-    try:
-        if x in [None, "", "-", ".---"]:
-            return default
-        return float(str(x).replace(",", ""))
-    except Exception:
-        return default
-
-
-def safe_text(value):
-    if pd.isna(value):
+def normalize_team_name(name):
+    if not name:
         return ""
-    return str(value).replace("<", "").replace(">", "")
+    name = name.lower()
+    name = name.replace("&", "and")
+    name = re.sub(r"[^a-z0-9 ]", "", name)
+    name = re.sub(r"\s+", " ", name).strip()
+    return name
 
 
-@st.cache_data(ttl=900)
-def mlb_get(endpoint, params=None):
-    url = f"{MLB_BASE}/{endpoint.lstrip('/')}"
-    r = requests.get(url, params=params or {}, timeout=20)
+def american_to_implied_prob(moneyline):
+    if moneyline is None or pd.isna(moneyline):
+        return None
+
+    moneyline = float(moneyline)
+
+    if moneyline < 0:
+        return abs(moneyline) / (abs(moneyline) + 100)
+
+    return 100 / (moneyline + 100)
+
+
+def prob_to_fair_moneyline(prob):
+    prob = float(prob)
+
+    if prob <= 0 or prob >= 1:
+        return None
+
+    if prob >= 0.5:
+        return int(round(-100 * prob / (1 - prob)))
+
+    return int(round(100 * (1 - prob) / prob))
+
+
+def format_moneyline(x):
+    if x is None or pd.isna(x):
+        return "—"
+
+    x = int(round(float(x)))
+
+    if x > 0:
+        return f"+{x}"
+
+    return str(x)
+
+
+def format_percent(x):
+    if x is None or pd.isna(x):
+        return "—"
+    return f"{x:.1%}"
+
+
+def get_secret(name):
+    try:
+        return st.secrets.get(name, "")
+    except Exception:
+        return ""
+
+
+def regular_season_start_for_year(year):
+    return date(year, 3, 1)
+
+
+# =========================
+# Model Loading
+# =========================
+
+@st.cache_resource
+def load_model_artifact():
+    if not MODEL_PATH.exists():
+        st.error(
+            f"Model file not found at: {MODEL_PATH}\n\n"
+            "Make sure mlb_logistic_model.joblib is inside model_artifacts/"
+        )
+        st.stop()
+
+    artifact = joblib.load(MODEL_PATH)
+
+    if isinstance(artifact, dict):
+        model = artifact.get("model") or artifact.get("pipeline") or artifact.get("estimator")
+        features = (
+            artifact.get("features")
+            or artifact.get("feature_names")
+            or artifact.get("selected_features")
+        )
+
+        if model is None:
+            st.error("Loaded model artifact is a dictionary, but no model was found inside it.")
+            st.stop()
+
+        if features is None:
+            features = infer_model_features(model)
+
+        return model, list(features)
+
+    model = artifact
+    features = infer_model_features(model)
+
+    return model, features
+
+
+def infer_model_features(model):
+    if hasattr(model, "feature_names_in_"):
+        return list(model.feature_names_in_)
+
+    if hasattr(model, "named_steps"):
+        for step in model.named_steps.values():
+            if hasattr(step, "feature_names_in_"):
+                return list(step.feature_names_in_)
+
+    return DEFAULT_FEATURES.copy()
+
+
+# =========================
+# MLB Data
+# =========================
+
+@st.cache_data(ttl=60 * 30)
+def fetch_schedule_range(start_day, end_day):
+    params = {
+        "sportId": 1,
+        "startDate": start_day,
+        "endDate": end_day,
+        "gameTypes": "R",
+        "hydrate": "team,linescore,probablePitcher",
+    }
+
+    r = requests.get(f"{MLB_BASE}/schedule", params=params, timeout=30)
     r.raise_for_status()
     return r.json()
 
 
-def get_stat(stats_list, key, default=0):
-    if not stats_list:
-        return default
-    splits = stats_list[0].get("splits", [])
-    if not splits:
-        return default
-    stat = splits[0].get("stat", {})
-    return stat.get(key, default)
-
-
-@st.cache_data(ttl=3600)
-def fetch_team_stats(team_id):
-    out = {}
-    try:
-        hitting = mlb_get(f"teams/{team_id}/stats", {"stats": "season", "group": "hitting"})
-        pitching = mlb_get(f"teams/{team_id}/stats", {"stats": "season", "group": "pitching"})
-        h_stats = hitting.get("stats", [])
-        p_stats = pitching.get("stats", [])
-
-        out["avg"] = safe_float(get_stat(h_stats, "avg", 0))
-        out["obp"] = safe_float(get_stat(h_stats, "obp", 0))
-        out["slg"] = safe_float(get_stat(h_stats, "slg", 0))
-        out["ops"] = safe_float(get_stat(h_stats, "ops", 0))
-        out["runs"] = safe_float(get_stat(h_stats, "runs", 0))
-        out["games"] = max(safe_float(get_stat(h_stats, "gamesPlayed", 1)), 1)
-        out["runs_per_game"] = out["runs"] / out["games"]
-
-        out["pitch_era"] = safe_float(get_stat(p_stats, "era", 4.50))
-        out["pitch_whip"] = safe_float(get_stat(p_stats, "whip", 1.30))
-        out["pitch_so"] = safe_float(get_stat(p_stats, "strikeOuts", 0))
-        out["pitch_bb"] = max(safe_float(get_stat(p_stats, "baseOnBalls", 1)), 1)
-        out["pitch_kbb"] = out["pitch_so"] / out["pitch_bb"]
-    except Exception:
-        out = {
-            "avg": .245, "obp": .315, "slg": .400, "ops": .715,
-            "runs_per_game": 4.3,
-            "pitch_era": 4.50, "pitch_whip": 1.30, "pitch_kbb": 2.4
-        }
-    return out
-
-
-@st.cache_data(ttl=3600)
-def fetch_pitcher_stats(person_id):
-    if not person_id:
-        return None
-    try:
-        data = mlb_get(f"people/{person_id}/stats", {"stats": "season", "group": "pitching"})
-        stats = data.get("stats", [])
-        return {
-            "era": safe_float(get_stat(stats, "era", 4.50)),
-            "whip": safe_float(get_stat(stats, "whip", 1.30)),
-            "so": safe_float(get_stat(stats, "strikeOuts", 0)),
-            "bb": max(safe_float(get_stat(stats, "baseOnBalls", 1)), 1),
-            "ip": safe_float(str(get_stat(stats, "inningsPitched", 0)).split(".")[0], 0),
-            "games": safe_float(get_stat(stats, "gamesPlayed", 0))
-        }
-    except Exception:
-        return None
-
-
-@st.cache_data(ttl=900)
-def fetch_schedule(slate_date):
-    data = mlb_get("schedule", {
-        "sportId": 1,
-        "date": slate_date.isoformat(),
-        "hydrate": "probablePitcher,team"
-    })
+def flatten_games(schedule_json):
     games = []
-    for d in data.get("dates", []):
-        games.extend(d.get("games", []))
+
+    for date_block in schedule_json.get("dates", []):
+        for game in date_block.get("games", []):
+            if game.get("gameType") != "R":
+                continue
+            games.append(game)
+
     return games
 
 
-@st.cache_data(ttl=600)
-def fetch_lineup_score(game_pk, side):
-    """
-    Uses MLB boxscore battingOrder when available.
-    If lineups are not posted, returns a neutral score and status.
-    """
-    try:
-        data = mlb_get(f"game/{game_pk}/boxscore")
-        team_data = data.get("teams", {}).get(side, {})
-        players = team_data.get("players", {})
-        batting_order = []
-        for _, p in players.items():
-            bo = p.get("battingOrder")
-            if bo:
-                batting_order.append((int(bo), p))
-        if not batting_order:
-            return 66, "Lineup not confirmed"
-
-        batting_order = sorted(batting_order, key=lambda x: x[0])[:9]
-        ops_values = []
-        for _, player in batting_order:
-            stat = player.get("seasonStats", {}).get("batting", {})
-            ops = safe_float(stat.get("ops", 0), 0)
-            if ops > 0:
-                ops_values.append(ops)
-
-        if not ops_values:
-            return 72, "Confirmed lineup, limited hitter stats"
-
-        avg_ops = sum(ops_values) / len(ops_values)
-        top_six_ops = sum(ops_values[:6]) / max(len(ops_values[:6]), 1)
-        score = 50 + ((avg_ops - .680) * 100) + ((top_six_ops - .700) * 75)
-        return round(clamp(score, 45, 95), 1), "Confirmed lineup"
-    except Exception:
-        return 66, "Lineup unavailable"
-
-
-def offense_score(stats):
-    ops = stats.get("ops", .715)
-    rpg = stats.get("runs_per_game", 4.3)
-    obp = stats.get("obp", .315)
-    slg = stats.get("slg", .400)
-
-    score = (
-        50
-        + (ops - .700) * 85
-        + (rpg - 4.30) * 5.5
-        + (obp - .315) * 75
-        + (slg - .400) * 45
-    )
-    return round(clamp(score, 35, 95), 1)
-
-
-def bullpen_score(stats):
-    era = stats.get("pitch_era", 4.50)
-    whip = stats.get("pitch_whip", 1.30)
-    kbb = stats.get("pitch_kbb", 2.4)
-
-    score = (
-        72
-        + (4.50 - era) * 7.0
-        + (1.30 - whip) * 25.0
-        + (kbb - 2.40) * 4.0
-    )
-    return round(clamp(score, 35, 95), 1)
-
-
-def sp_score(pitcher_stats):
-    if pitcher_stats is None:
-        return 62, "No probable starter stats"
-
-    era = pitcher_stats.get("era", 4.50)
-    whip = pitcher_stats.get("whip", 1.30)
-    kbb = pitcher_stats.get("so", 0) / max(pitcher_stats.get("bb", 1), 1)
-    ip = pitcher_stats.get("ip", 0)
-
-    score = (
-        74
-        + (4.30 - era) * 7.5
-        + (1.28 - whip) * 28
-        + (kbb - 2.50) * 4.5
-    )
-
-    if ip < 20:
-        score -= 5
-
-    return round(clamp(score, 35, 96), 1), f"ERA {era:.2f}, WHIP {whip:.2f}, K/BB {kbb:.2f}"
-
-
-def situational_score(is_home, game_number=1):
-    score = 70
-    if is_home:
-        score += 5
-    return round(clamp(score, 45, 85), 1)
-
-
-def grade_score(score):
-    if score >= 85:
-        return "A"
-    if score >= 78:
-        return "B"
-    if score >= 70:
-        return "C"
-    return "Pass"
-
-
-def grade_label(score):
-    grade = grade_score(score)
-    if grade == "A":
-        return "Core projected winner"
-    if grade == "B":
-        return "Playable winner candidate"
-    if grade == "C":
-        return "Thin / watchlist only"
-    return "Pass"
-
-
-def grade_class(grade):
-    if grade == "A":
-        return "a"
-    if grade == "B":
-        return "b"
-    if grade == "C":
-        return "c"
-    return "pass"
-
-
-def moneyline_to_implied(ml):
-    try:
-        ml = float(ml)
-    except Exception:
-        return None
-    if math.isnan(ml) or ml == 0:
-        return None
-    if ml < 0:
-        return abs(ml) / (abs(ml) + 100)
-    return 100 / (ml + 100)
-
-
-def format_moneyline(ml):
-    try:
-        ml = float(ml)
-    except Exception:
-        return "—"
-    if math.isnan(ml) or ml == 0:
-        return "—"
-    if ml > 0:
-        return f"+{int(ml)}"
-    return str(int(ml))
-
-
-def reward_view(ml):
-    try:
-        ml = float(ml)
-    except Exception:
-        return "No odds entered"
-    if math.isnan(ml) or ml == 0:
-        return "No odds entered"
-    if ml >= 120:
-        return "Plus-money reward"
-    if ml > 0:
-        return "Small plus-money reward"
-    if ml >= -130:
-        return "Manageable favorite price"
-    if ml >= -180:
-        return "Expensive favorite"
-    return "Very expensive favorite"
-
-
-def strongest_metric(row):
-    metric_names = {
-        "SP_Score": "Starting Pitcher",
-        "Offense_Score": "Offense",
-        "Bullpen_Score": "Pitching/Bullpen",
-        "Lineup_Score": "Lineup",
-        "Situational_Score": "Situational"
-    }
-    best_col = max(metric_names.keys(), key=lambda c: float(row[c]))
-    return metric_names[best_col]
-
-
-def profile_flags(row):
-    flags = []
-    if row["SP_Score"] >= 85:
-        flags.append("SP+")
-    if row["Offense_Score"] >= 85:
-        flags.append("OFF+")
-    if row["Bullpen_Score"] >= 85:
-        flags.append("PITCH+")
-    if row["Lineup_Score"] >= 85:
-        flags.append("LU+")
-    if row["Situational_Score"] >= 78:
-        flags.append("SIT+")
-    return " / ".join(flags) if flags else "Balanced"
-
-
-def score_board(df, weights):
-    df = df.copy()
-    total_weight = max(sum(weights.values()), 1)
-
-    df["Win_Score"] = (
-        df["SP_Score"] * weights["SP_Score"] +
-        df["Offense_Score"] * weights["Offense_Score"] +
-        df["Bullpen_Score"] * weights["Bullpen_Score"] +
-        df["Lineup_Score"] * weights["Lineup_Score"] +
-        df["Situational_Score"] * weights["Situational_Score"]
-    ) / total_weight
-
-    df["Win_Score"] = df["Win_Score"].round(1)
-    df["Grade"] = df["Win_Score"].apply(grade_score)
-    df["Suggested_Status"] = df["Win_Score"].apply(grade_label)
-    df["Strongest_Metric"] = df.apply(strongest_metric, axis=1)
-    df["Profile"] = df.apply(profile_flags, axis=1)
-    df["Moneyline_Display"] = df["Moneyline"].apply(format_moneyline)
-    df["Implied_Probability"] = df["Moneyline"].apply(moneyline_to_implied)
-    df["Implied_Probability"] = df["Implied_Probability"].apply(lambda x: round(x * 100, 1) if x is not None else None)
-    df["Reward_View"] = df["Moneyline"].apply(reward_view)
-
-    df = df.sort_values("Win_Score", ascending=False).reset_index(drop=True)
-    df.insert(0, "Rank", df.index + 1)
-    return df
-
-
-def build_live_board(slate_date):
-    games = fetch_schedule(slate_date)
-    rows = []
-
-    for idx, game in enumerate(games, start=1):
-        game_pk = game.get("gamePk")
-        teams = game.get("teams", {})
-        away = teams.get("away", {})
-        home = teams.get("home", {})
-
-        away_team = away.get("team", {})
-        home_team = home.get("team", {})
-
-        away_prob = away.get("probablePitcher", {})
-        home_prob = home.get("probablePitcher", {})
-
-        game_state = game.get("status", {}).get("detailedState", "")
-
-        for side, opp_side, is_home in [
-            ("away", "home", False),
-            ("home", "away", True)
-        ]:
-            team_obj = teams.get(side, {}).get("team", {})
-            opp_obj = teams.get(opp_side, {}).get("team", {})
-            probable = teams.get(side, {}).get("probablePitcher", {})
-
-            team_id = team_obj.get("id")
-            opp_id = opp_obj.get("id")
-            team_name = team_obj.get("abbreviation") or team_obj.get("teamName") or team_obj.get("name")
-            opp_name = opp_obj.get("abbreviation") or opp_obj.get("teamName") or opp_obj.get("name")
-            pitcher_name = probable.get("fullName", "TBD")
-            pitcher_id = probable.get("id")
-
-            team_stats = fetch_team_stats(team_id)
-            pitcher_stats = fetch_pitcher_stats(pitcher_id)
-
-            sp, sp_note = sp_score(pitcher_stats)
-            off = offense_score(team_stats)
-            pen = bullpen_score(team_stats)
-            lu, lu_status = fetch_lineup_score(game_pk, side)
-            sit = situational_score(is_home)
-
-            notes = f"{sp_note}; {lu_status}; game status: {game_state}"
-
-            rows.append({
-                "Game": idx,
-                "Team": team_name,
-                "Opponent": opp_name,
-                "Home": "Yes" if is_home else "No",
-                "Team_ID": team_id,
-                "Opponent_ID": opp_id,
-                "Game_PK": game_pk,
-                "Starting_Pitcher": pitcher_name,
-                "SP_Score": sp,
-                "Offense_Score": off,
-                "Bullpen_Score": pen,
-                "Lineup_Score": lu,
-                "Situational_Score": sit,
-                "Moneyline": None,
-                "Notes": notes
-            })
-
-    return pd.DataFrame(rows)
-
-
-
-
-
-def logistic_probability(edge, scale=12.0):
-    """
-    Converts matchup edge into projected win probability.
-    First-pass calibration curve. Backtesting/calibration comes next.
-    """
-    try:
-        edge = float(edge)
-    except Exception:
-        edge = 0
-    prob = 1 / (1 + math.exp(-edge / scale))
-    return round(clamp(prob * 100, 35, 88), 1)
-
-
-def grade_probability(win_prob):
-    if win_prob >= 70:
-        return "A"
-    if win_prob >= 62:
-        return "B"
-    if win_prob >= 55:
-        return "C"
-    return "Pass"
-
-
-def probability_status(win_prob, edge):
-    if win_prob >= 70 and edge >= 10:
-        return "A — Core projected winner"
-    if win_prob >= 62 and edge >= 5:
-        return "B — Playable winner candidate"
-    if win_prob >= 55 and edge >= 2:
-        return "C — Thin / watchlist only"
-    return "Pass / No strong separation"
-
-
-def build_matchup_reasons(row, opponent_row):
-    reasons = []
-
-    sp_adv = row.get("SP_Advantage", 0)
-    off_adv = row.get("Offense_Advantage", 0)
-    pen_adv = row.get("Bullpen_Advantage", 0)
-    lu_adv = row.get("Lineup_Advantage", 0)
-    sit_adv = row.get("Situational_Advantage", 0)
-
-    if sp_adv >= 8:
-        reasons.append("Major SP Edge")
-    elif sp_adv >= 4:
-        reasons.append("SP Edge")
-
-    if off_adv >= 8:
-        reasons.append("Major Offense Edge")
-    elif off_adv >= 4:
-        reasons.append("Offense Edge")
-
-    if pen_adv >= 7:
-        reasons.append("Pitching/Bullpen Edge")
-    elif pen_adv >= 3:
-        reasons.append("Slight Pitching Edge")
-
-    if lu_adv >= 6:
-        reasons.append("Lineup Edge")
-    elif lu_adv >= 3:
-        reasons.append("Slight Lineup Edge")
-
-    if sit_adv >= 3:
-        reasons.append("Home/Situational Edge")
-
-    if row.get("Projected_Win_Prob", 0) >= 70:
-        reasons.append("High Win Projection")
-
-    if not reasons:
-        reasons.append("Small Matchup Edge")
-
-    return " | ".join(reasons[:6])
-
-
-def apply_phase2_matchup_engine(board):
-    """
-    Converts raw team category scores into head-to-head matchup advantages.
-    Produces Projected Win Probability and keeps only one suggested side per game.
-    """
-    board = board.copy()
-
-    if "Game_PK" not in board.columns:
-        board["Matchup_Edge"] = 0
-        board["Projected_Win_Prob"] = board["Win_Score"].apply(lambda x: logistic_probability((x - 50) / 2))
-        board["Grade"] = board["Projected_Win_Prob"].apply(grade_probability)
-        board["Suggested_Status"] = board.apply(lambda r: probability_status(r["Projected_Win_Prob"], r["Matchup_Edge"]), axis=1)
-        board["Suggested_Side"] = True
-        board["Game_Winner_Filter"] = "Suggested Side"
-        board["Why"] = "No matchup comparison available"
-        return board, board
-
-    enhanced_rows = []
-
-    edge_weights = {
-        "SP_Score": 0.42,
-        "Offense_Score": 0.26,
-        "Bullpen_Score": 0.16,
-        "Lineup_Score": 0.10,
-        "Situational_Score": 0.06,
+def is_final_game(game):
+    status = game.get("status", {}).get("detailedState", "")
+    teams = game.get("teams", {})
+    home_score = teams.get("home", {}).get("score")
+    away_score = teams.get("away", {}).get("score")
+
+    return status in FINAL_STATES and home_score is not None and away_score is not None
+
+
+def create_team_state():
+    return {
+        "games": 0,
+        "wins": 0,
+        "runs_for": 0,
+        "runs_against": 0,
+        "recent": deque(maxlen=10),
     }
 
-    for game_pk, group in board.groupby("Game_PK"):
-        group = group.sort_values("Win_Score", ascending=False).copy()
 
-        if len(group) == 1:
-            row = group.iloc[0].copy()
-            for col in ["SP_Advantage", "Offense_Advantage", "Bullpen_Advantage", "Lineup_Advantage", "Situational_Advantage"]:
-                row[col] = 0
-            row["Matchup_Edge"] = 0
-            row["Projected_Win_Prob"] = 50
-            row["Grade"] = grade_probability(row["Projected_Win_Prob"])
-            row["Suggested_Status"] = probability_status(row["Projected_Win_Prob"], row["Matchup_Edge"])
-            row["Suggested_Side"] = True
-            row["Game_Winner_Filter"] = "Suggested Side"
-            row["Why"] = "No matchup comparison available"
-            enhanced_rows.append(row)
-            continue
+def update_team_state(state, runs_for, runs_against):
+    win = 1 if runs_for > runs_against else 0
 
-        rows = [group.iloc[0].copy(), group.iloc[1].copy()]
+    state["games"] += 1
+    state["wins"] += win
+    state["runs_for"] += runs_for
+    state["runs_against"] += runs_against
 
-        for i, row in enumerate(rows):
-            opponent = rows[1 - i]
-
-            sp_adv = row["SP_Score"] - opponent["SP_Score"]
-            off_adv = row["Offense_Score"] - opponent["Offense_Score"]
-            pen_adv = row["Bullpen_Score"] - opponent["Bullpen_Score"]
-            lu_adv = row["Lineup_Score"] - opponent["Lineup_Score"]
-            sit_adv = row["Situational_Score"] - opponent["Situational_Score"]
-
-            matchup_edge = (
-                sp_adv * edge_weights["SP_Score"] +
-                off_adv * edge_weights["Offense_Score"] +
-                pen_adv * edge_weights["Bullpen_Score"] +
-                lu_adv * edge_weights["Lineup_Score"] +
-                sit_adv * edge_weights["Situational_Score"]
-            )
-
-            row["SP_Advantage"] = round(sp_adv, 1)
-            row["Offense_Advantage"] = round(off_adv, 1)
-            row["Bullpen_Advantage"] = round(pen_adv, 1)
-            row["Lineup_Advantage"] = round(lu_adv, 1)
-            row["Situational_Advantage"] = round(sit_adv, 1)
-            row["Matchup_Edge"] = round(matchup_edge, 1)
-            row["Projected_Win_Prob"] = logistic_probability(matchup_edge)
-            row["Grade"] = grade_probability(row["Projected_Win_Prob"])
-            row["Suggested_Status"] = probability_status(row["Projected_Win_Prob"], matchup_edge)
-            row["Why"] = build_matchup_reasons(row, opponent)
-
-            enhanced_rows.append(row)
-
-    full = pd.DataFrame(enhanced_rows)
-
-    full["Suggested_Side"] = full.groupby("Game_PK")["Projected_Win_Prob"].rank(
-        method="first", ascending=False
-    ) == 1
-
-    full["Game_Winner_Filter"] = full["Suggested_Side"].apply(
-        lambda x: "Suggested Side" if x else "Opponent Side / Not Suggested"
-    )
-
-    suggested = full[full["Suggested_Side"]].copy()
-    suggested = suggested.sort_values(["Projected_Win_Prob", "Matchup_Edge", "Win_Score"], ascending=False).reset_index(drop=True)
-    suggested["Rank"] = suggested.index + 1
-
-    full = full.sort_values(["Game_PK", "Suggested_Side", "Projected_Win_Prob"], ascending=[True, False, False]).reset_index(drop=True)
-    return suggested, full
-
-
-def render_card(row):
-    g = safe_text(row["Grade"])
-    cls = grade_class(g)
-    home_text = "HOME" if str(row["Home"]).lower() in ["yes", "true", "1", "home"] else "AWAY"
-    notes = safe_text(row.get("Notes", ""))[:95]
-    team = safe_text(row["Team"])
-    opp = safe_text(row["Opponent"])
-    metric = safe_text(row["Strongest_Metric"])
-    profile = safe_text(row["Profile"])
-    ml = safe_text(row.get("Moneyline_Display", "—"))
-    reward = safe_text(row.get("Reward_View", "No odds entered"))
-    pitcher = safe_text(row.get("Starting_Pitcher", "TBD"))
-    reason_html = "".join([f'<span class="reason-chip">{safe_text(x)}</span>' for x in safe_text(row.get("Why", "")).split(" | ") if x])
-
-    st.markdown(f"""
-    <div class="team-card team-card-{cls}">
-        <div class="rank-line">RANK #{int(row["Rank"])} · {home_text}</div>
-        <div class="team-name">{team}</div>
-        <div class="matchup">vs {opp}</div>
-        <div class="pitcher">SP: {pitcher}</div>
-        <div class="score-flex">
-            <div>
-                <div class="score-label">Win Score</div>
-                <div class="win-score">{row["Win_Score"]}</div>
-            </div>
-            <div class="grade-pill pill-{cls}">{g}</div>
-        </div>
-        <div class="confidence-line">Projected Win: {row.get("Projected_Win_Prob", "—")}%</div>
-        <div class="confidence-note">Matchup Edge: {row.get("Matchup_Edge", "—")} · ranked by win probability</div>
-        <div class="odds">Odds: {ml}</div>
-        <div class="odds-note">{reward} · odds do not affect rank</div>
-        <div style="margin-top:10px;">{reason_html}</div>
-        <div class="footer-note"><b>{metric}</b> · {profile}<br>{notes}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-def render_team_tiles(board, max_cards=8):
-    top = board.head(max_cards).reset_index(drop=True)
-    for start in range(0, len(top), 4):
-        cols = st.columns(4)
-        chunk = top.iloc[start:start+4]
-        for col, (_, row) in zip(cols, chunk.iterrows()):
-            with col:
-                render_card(row)
-
-
-def color_grade(val):
-    if val == "A":
-        return "background-color: #123d22; color: #7ee787; font-weight: 800"
-    if val == "B":
-        return "background-color: #102f4f; color: #bfdbfe; font-weight: 800"
-    if val == "C":
-        return "background-color: #3d2f10; color: #fde68a; font-weight: 800"
-    if val == "Pass":
-        return "background-color: #4a1717; color: #fecaca; font-weight: 800"
-    return ""
-
-
-def style_grades(df):
-    return df.style.map(color_grade, subset=["Grade"])
-
-
-st.markdown("""
-<div class="hero-card">
-    <div class="hero-title">⚾ Moneyline Winners</div>
-    <div class="hero-subtitle">
-        Phase 2 head-to-head engine: projected win probability, matchup edges, and one suggested side per game.
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
-st.markdown("""
-<div class="info-strip">
-    Suggested picks are based only on Win Score and Grade. Moneyline odds are optional reward context and never change the picks.
-</div>
-""", unsafe_allow_html=True)
-
-with st.sidebar:
-    st.markdown("""
-    <div class="sidebar-card">
-        <div class="sidebar-card-title">Live Engine</div>
-        <div class="sidebar-card-text">
-            Pulls schedule, probable starters, team offense, team pitching, and available lineup data from MLB.
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    selected_date = st.date_input("Slate Date", value=date.today())
-
-    if st.button("Refresh Live MLB Data", use_container_width=True):
-        st.cache_data.clear()
-        with st.spinner("Pulling MLB slate and scoring teams..."):
-            try:
-                st.session_state["live_data"] = build_live_board(selected_date)
-                st.session_state["last_refresh"] = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
-                st.success("Live data refreshed.")
-            except Exception as e:
-                st.error(f"Live refresh failed: {e}")
-
-    st.markdown("""
-    <div class="sidebar-card">
-        <div class="sidebar-card-title">Scoring Weights</div>
-        <div class="sidebar-card-text">
-            Projected win likelihood only. Odds do not affect these scores.
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    weights = {
-        "SP_Score": st.number_input("Starting Pitcher", min_value=0, max_value=100, value=DEFAULT_WEIGHTS["SP_Score"]),
-        "Offense_Score": st.number_input("Offense", min_value=0, max_value=100, value=DEFAULT_WEIGHTS["Offense_Score"]),
-        "Bullpen_Score": st.number_input("Pitching/Bullpen", min_value=0, max_value=100, value=DEFAULT_WEIGHTS["Bullpen_Score"]),
-        "Lineup_Score": st.number_input("Lineup", min_value=0, max_value=100, value=DEFAULT_WEIGHTS["Lineup_Score"]),
-        "Situational_Score": st.number_input("Situational", min_value=0, max_value=100, value=DEFAULT_WEIGHTS["Situational_Score"]),
-    }
-
-    st.markdown("""
-    <div class="sidebar-card">
-        <div class="sidebar-card-title">Decision Rules</div>
-        <div class="sidebar-card-text">
-            <b>85+</b> = A — Core projected winner<br>
-            <b>78-84</b> = B — Playable<br>
-            <b>70-77</b> = C — Thin<br>
-            <b>&lt;70</b> = Pass
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-tab1, tab2, tab3, tab4 = st.tabs(["Dashboard", "Data / Odds Input", "Raw Engine Data", "Metric Guide"])
-
-if "live_data" not in st.session_state:
-    try:
-        with st.spinner("Loading today's MLB slate..."):
-            st.session_state["live_data"] = build_live_board(selected_date)
-            st.session_state["last_refresh"] = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
-    except Exception as e:
-        st.session_state["live_data"] = pd.DataFrame(columns=ENGINE_COLUMNS)
-        st.session_state["load_error"] = str(e)
-
-with tab2:
-    st.subheader("Optional Odds / Manual Adjustments")
-    st.write("The engine auto-generates scores. You can optionally enter moneylines or adjust a score if needed.")
-
-    if "load_error" in st.session_state:
-        st.error(f"Initial live load error: {st.session_state['load_error']}")
-
-    df_edit = st.session_state["live_data"].copy()
-
-    edited = st.data_editor(
-        df_edit,
-        num_rows="fixed",
-        use_container_width=True,
-        key="engine_editor",
-        column_config={
-            "Moneyline": st.column_config.NumberColumn("Moneyline", help="Optional. Does not affect rank."),
-            "SP_Score": st.column_config.NumberColumn("SP Score", min_value=0, max_value=100),
-            "Offense_Score": st.column_config.NumberColumn("Offense Score", min_value=0, max_value=100),
-            "Bullpen_Score": st.column_config.NumberColumn("Pitching/Bullpen Score", min_value=0, max_value=100),
-            "Lineup_Score": st.column_config.NumberColumn("Lineup Score", min_value=0, max_value=100),
-            "Situational_Score": st.column_config.NumberColumn("Situational Score", min_value=0, max_value=100),
+    state["recent"].append(
+        {
+            "win": win,
+            "runs_for": runs_for,
+            "runs_against": runs_against,
         }
     )
-    st.session_state["live_data"] = edited
 
-    st.download_button(
-        "Export Current Engine Data",
-        data=edited.to_csv(index=False),
-        file_name=f"moneyline_winners_engine_data_{selected_date.isoformat()}.csv",
-        mime="text/csv"
-    )
 
-with tab1:
-    df = st.session_state["live_data"].copy()
+def snapshot_team_state(state):
+    games = state["games"]
 
-    if df.empty:
-        st.error("No MLB games loaded. Try Refresh Live MLB Data.")
+    if games <= 0:
+        return {
+            "win_pct": 0.500,
+            "rpg": 4.50,
+            "rapg": 4.50,
+            "run_diff_per_game": 0.00,
+            "recent_win_pct": 0.500,
+            "recent_rpg": 4.50,
+            "recent_rapg": 4.50,
+        }
+
+    win_pct = state["wins"] / games
+    rpg = state["runs_for"] / games
+    rapg = state["runs_against"] / games
+    run_diff_per_game = rpg - rapg
+
+    recent = list(state["recent"])
+
+    if len(recent) == 0:
+        recent_win_pct = win_pct
+        recent_rpg = rpg
+        recent_rapg = rapg
     else:
-        raw_board = score_board(df, weights)
-        suggested_board, full_board = apply_phase2_matchup_engine(raw_board)
+        recent_win_pct = sum(g["win"] for g in recent) / len(recent)
+        recent_rpg = sum(g["runs_for"] for g in recent) / len(recent)
+        recent_rapg = sum(g["runs_against"] for g in recent) / len(recent)
 
-        a_count = int((suggested_board["Grade"] == "A").sum())
-        b_count = int((suggested_board["Grade"] == "B").sum())
-        top_score = suggested_board["Projected_Win_Prob"].max() if len(suggested_board) else 0
-        confirmed_lineups = int(raw_board["Notes"].str.contains("Confirmed lineup", na=False).sum())
+    return {
+        "win_pct": win_pct,
+        "rpg": rpg,
+        "rapg": rapg,
+        "run_diff_per_game": run_diff_per_game,
+        "recent_win_pct": recent_win_pct,
+        "recent_rpg": recent_rpg,
+        "recent_rapg": recent_rapg,
+    }
 
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Games Ranked", len(suggested_board))
-        m2.metric("A-Grade Sides", a_count)
-        m3.metric("B-Grade Sides", b_count)
-        m4.metric("Top Win %", top_score)
 
-        st.caption(f"Last refresh: {st.session_state.get('last_refresh', 'Not refreshed yet')}")
+def build_team_states(history_games):
+    team_states = defaultdict(create_team_state)
 
-        st.markdown("""
-        <div class="info-strip">
-            Phase 2 engine active: the suggested board ranks one side per game by Projected Win Probability.
-        </div>
-        """, unsafe_allow_html=True)
+    final_games = [g for g in history_games if is_final_game(g)]
 
-        if confirmed_lineups < len(raw_board):
-            st.markdown(f"""
-            <div class="warning-strip">
-                {confirmed_lineups} of {len(raw_board)} team lineups appear confirmed from MLB boxscore data. 
-                Lineup Score is automatically neutral until lineups are available.
-            </div>
-            """, unsafe_allow_html=True)
-
-        st.markdown('<div class="section-title">Top Projected Win Probabilities</div>', unsafe_allow_html=True)
-        render_team_tiles(suggested_board, max_cards=8)
-
-        st.markdown('<div class="section-title">Suggested Winners Board</div>', unsafe_allow_html=True)
-        suggested_cols = [
-            "Rank", "Team", "Opponent", "Home", "Starting_Pitcher",
-            "Projected_Win_Prob", "Matchup_Edge", "Grade", "Suggested_Status", "Why",
-            "Moneyline_Display", "Implied_Probability", "Reward_View",
-            "SP_Advantage", "Offense_Advantage", "Bullpen_Advantage",
-            "Lineup_Advantage", "Situational_Advantage",
-            "SP_Score", "Offense_Score", "Bullpen_Score",
-            "Lineup_Score", "Situational_Score", "Notes"
-        ]
-
-        st.dataframe(
-            style_grades(suggested_board[suggested_cols]),
-            use_container_width=True,
-            hide_index=True
-        )
-
-        st.markdown('<div class="section-title">Full Matchup Comparison</div>', unsafe_allow_html=True)
-        full_cols = [
-            "Game_PK", "Game_Winner_Filter", "Team", "Opponent", "Home", "Starting_Pitcher",
-            "Projected_Win_Prob", "Matchup_Edge", "Grade", "Why",
-            "Moneyline_Display", "SP_Advantage", "Offense_Advantage", "Bullpen_Advantage",
-            "Lineup_Advantage", "Situational_Advantage",
-            "SP_Score", "Offense_Score", "Bullpen_Score", "Lineup_Score", "Situational_Score", "Notes"
-        ]
-
-        st.dataframe(
-            style_grades(full_board[full_cols]),
-            use_container_width=True,
-            hide_index=True
-        )
-
-        st.download_button(
-            "Export Suggested Winners Board",
-            data=suggested_board.to_csv(index=False),
-            file_name=f"moneyline_winners_suggested_board_{selected_date.isoformat()}.csv",
-            mime="text/csv"
-        )
-
-        st.download_button(
-            "Export Full Matchup Comparison",
-            data=full_board.to_csv(index=False),
-            file_name=f"moneyline_winners_full_matchups_{selected_date.isoformat()}.csv",
-            mime="text/csv"
-        )
-
-with tab3:
-    st.subheader("Raw Engine Data")
-    st.write("These are the auto-generated category scores before final weighting.")
-    st.dataframe(st.session_state["live_data"], use_container_width=True, hide_index=True)
-
-with tab4:
-    st.subheader("Metric Guide")
-
-    guide = pd.DataFrame([
-        ["Starting Pitcher", "MLB probable starter season ERA, WHIP, K/BB, innings sample", "40%"],
-        ["Offense", "MLB team season OPS, OBP, SLG, runs per game", "25%"],
-        ["Pitching/Bullpen", "MLB team pitching ERA, WHIP, K/BB as current proxy", "15%"],
-        ["Lineup", "MLB boxscore battingOrder when available; otherwise neutral placeholder", "12%"],
-        ["Situational", "Home field baseline; can be expanded with travel/rest/weather", "8%"],
-        ["Moneyline", "Optional reward context only. Does not affect rank or suggested status.", "0%"],
-    ], columns=["Category", "Current Live Engine Input", "Model Weight"])
-
-    st.dataframe(guide, use_container_width=True, hide_index=True)
-
-    st.warning(
-        "This Phase 2 version ranks by projected win probability from head-to-head matchup advantages. Next refinements should backtest/calibrate the probability curve, replace team pitching proxy with true bullpen data, add handedness splits, add last-14-day form, and connect optional Odds API."
+    final_games = sorted(
+        final_games,
+        key=lambda g: (
+            g.get("officialDate", ""),
+            g.get("gamePk", 0),
+        ),
     )
+
+    for game in final_games:
+        teams = game.get("teams", {})
+
+        home = teams.get("home", {})
+        away = teams.get("away", {})
+
+        home_team = home.get("team", {})
+        away_team = away.get("team", {})
+
+        home_id = home_team.get("id")
+        away_id = away_team.get("id")
+
+        home_score = int(home.get("score", 0))
+        away_score = int(away.get("score", 0))
+
+        update_team_state(team_states[home_id], home_score, away_score)
+        update_team_state(team_states[away_id], away_score, home_score)
+
+    return team_states
+
+
+def build_features_for_game(game, team_states):
+    teams = game.get("teams", {})
+
+    home = teams.get("home", {})
+    away = teams.get("away", {})
+
+    home_team = home.get("team", {})
+    away_team = away.get("team", {})
+
+    home_id = home_team.get("id")
+    away_id = away_team.get("id")
+
+    home_snapshot = snapshot_team_state(team_states[home_id])
+    away_snapshot = snapshot_team_state(team_states[away_id])
+
+    features = {
+        "win_pct_diff": home_snapshot["win_pct"] - away_snapshot["win_pct"],
+        "rpg_diff": home_snapshot["rpg"] - away_snapshot["rpg"],
+
+        # Positive means the away team has allowed more runs per game than the home team.
+        "rapg_diff": away_snapshot["rapg"] - home_snapshot["rapg"],
+
+        "run_diff_per_game_diff": (
+            home_snapshot["run_diff_per_game"] - away_snapshot["run_diff_per_game"]
+        ),
+        "recent_win_pct_diff": (
+            home_snapshot["recent_win_pct"] - away_snapshot["recent_win_pct"]
+        ),
+        "recent_rpg_diff": home_snapshot["recent_rpg"] - away_snapshot["recent_rpg"],
+
+        # Keep this as home recent runs allowed minus away recent runs allowed.
+        # This matches the research engine's observed negative coefficient behavior.
+        "recent_rapg_diff": (
+            home_snapshot["recent_rapg"] - away_snapshot["recent_rapg"]
+        ),
+
+        "home_field": 1.0,
+    }
+
+    return features
+
+
+def get_probable_pitcher(game, side):
+    try:
+        pitcher = game.get("teams", {}).get(side, {}).get("probablePitcher")
+        if pitcher:
+            return pitcher.get("fullName", "TBD")
+    except Exception:
+        pass
+
+    return "TBD"
+
+
+# =========================
+# Odds
+# =========================
+
+@st.cache_data(ttl=60 * 10)
+def fetch_moneyline_odds(api_key):
+    if not api_key:
+        return {}
+
+    url = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds"
+
+    params = {
+        "apiKey": api_key,
+        "regions": "us",
+        "markets": "h2h",
+        "oddsFormat": "american",
+    }
+
+    r = requests.get(url, params=params, timeout=30)
+    r.raise_for_status()
+
+    data = r.json()
+    odds_by_team = {}
+
+    for event in data:
+        for bookmaker in event.get("bookmakers", []):
+            for market in bookmaker.get("markets", []):
+                if market.get("key") != "h2h":
+                    continue
+
+                for outcome in market.get("outcomes", []):
+                    team_name = outcome.get("name")
+                    price = outcome.get("price")
+
+                    if team_name is None or price is None:
+                        continue
+
+                    key = normalize_team_name(team_name)
+
+                    # Higher American price is always better for the bettor:
+                    # +135 beats +120, and -105 beats -120.
+                    if key not in odds_by_team or price > odds_by_team[key]:
+                        odds_by_team[key] = price
+
+    return odds_by_team
+
+
+# =========================
+# Grading
+# =========================
+
+def grade_edge(edge):
+    if edge is None or pd.isna(edge):
+        return "MODEL"
+
+    if edge >= 0.05:
+        return "A"
+
+    if edge >= 0.035:
+        return "B"
+
+    if edge >= 0.02:
+        return "C"
+
+    return "PASS"
+
+
+def grade_sort_value(grade):
+    order = {
+        "A": 4,
+        "B": 3,
+        "C": 2,
+        "MODEL": 1,
+        "PASS": 0,
+    }
+    return order.get(grade, 0)
+
+
+# =========================
+# App
+# =========================
+
+st.title("⚾ Moneyline Winners v1.0")
+st.caption("Production Model v1 — validated team-only logistic model. Numbers decide. Not opinions.")
+
+model, model_features = load_model_artifact()
+
+today_et = datetime.now(ZoneInfo("America/New_York")).date()
+
+with st.sidebar:
+    st.header("Controls")
+
+    selected_date = st.date_input(
+        "Game Date",
+        value=today_et,
+    )
+
+    default_odds_key = os.getenv("ODDS_API_KEY", "") or get_secret("ODDS_API_KEY")
+
+    odds_api_key = st.text_input(
+        "Odds API Key",
+        value=default_odds_key,
+        type="password",
+        help="Optional. Leave blank to show model probabilities without market edge.",
+    )
+
+    if st.button("Refresh Data"):
+        st.cache_data.clear()
+        st.rerun()
+
+    st.divider()
+
+    st.write("### Model")
+    st.write("Production Feature Set:")
+    st.code(", ".join(model_features), language="text")
+
+    st.write("### Notes")
+    st.write(
+        "v1.0 uses the trained research model. Odds are used only after prediction "
+        "to calculate market edge."
+    )
+
+
+selected_date = pd.to_datetime(selected_date).date()
+season_start = regular_season_start_for_year(selected_date.year)
+history_end = selected_date - timedelta(days=1)
+
+try:
+    if history_end >= season_start:
+        history_json = fetch_schedule_range(
+            season_start.isoformat(),
+            history_end.isoformat(),
+        )
+        history_games = flatten_games(history_json)
+    else:
+        history_games = []
+
+    today_json = fetch_schedule_range(
+        selected_date.isoformat(),
+        selected_date.isoformat(),
+    )
+    today_games = flatten_games(today_json)
+
+except Exception as e:
+    st.error(f"MLB data download failed: {e}")
+    st.stop()
+
+
+team_states = build_team_states(history_games)
+
+try:
+    odds_by_team = fetch_moneyline_odds(odds_api_key)
+except Exception as e:
+    odds_by_team = {}
+    st.warning(f"Odds download failed. Showing model-only board. Error: {e}")
+
+
+if not today_games:
+    st.warning("No regular-season MLB games found for the selected date.")
+    st.stop()
+
+
+game_rows = []
+all_side_rows = []
+
+for game in today_games:
+    teams = game.get("teams", {})
+
+    home_team = teams.get("home", {}).get("team", {})
+    away_team = teams.get("away", {}).get("team", {})
+
+    home_name = home_team.get("name", "Home")
+    away_name = away_team.get("name", "Away")
+
+    home_abbr = home_team.get("abbreviation") or home_team.get("teamName") or home_name
+    away_abbr = away_team.get("abbreviation") or away_team.get("teamName") or away_name
+
+    game_label = f"{away_abbr} @ {home_abbr}"
+
+    features = build_features_for_game(game, team_states)
+
+    X = pd.DataFrame([features])
+
+    for f in model_features:
+        if f not in X.columns:
+            X[f] = 0.0
+
+    X = X[model_features].astype(float)
+
+    try:
+        home_prob = float(model.predict_proba(X)[0][1])
+    except Exception as e:
+        st.error(f"Prediction failed for {game_label}: {e}")
+        st.stop()
+
+    away_prob = 1 - home_prob
+
+    home_key = normalize_team_name(home_name)
+    away_key = normalize_team_name(away_name)
+
+    home_market_ml = odds_by_team.get(home_key)
+    away_market_ml = odds_by_team.get(away_key)
+
+    home_market_prob = american_to_implied_prob(home_market_ml)
+    away_market_prob = american_to_implied_prob(away_market_ml)
+
+    home_edge = None if home_market_prob is None else home_prob - home_market_prob
+    away_edge = None if away_market_prob is None else away_prob - away_market_prob
+
+    candidates = [
+        {
+            "game": game_label,
+            "team": home_abbr,
+            "team_full": home_name,
+            "opponent": away_abbr,
+            "side": "Home",
+            "model_prob": home_prob,
+            "fair_ml": prob_to_fair_moneyline(home_prob),
+            "market_ml": home_market_ml,
+            "market_prob": home_market_prob,
+            "edge": home_edge,
+            "probable_pitcher": get_probable_pitcher(game, "home"),
+        },
+        {
+            "game": game_label,
+            "team": away_abbr,
+            "team_full": away_name,
+            "opponent": home_abbr,
+            "side": "Away",
+            "model_prob": away_prob,
+            "fair_ml": prob_to_fair_moneyline(away_prob),
+            "market_ml": away_market_ml,
+            "market_prob": away_market_prob,
+            "edge": away_edge,
+            "probable_pitcher": get_probable_pitcher(game, "away"),
+        },
+    ]
+
+    all_side_rows.extend(candidates)
+
+    priced_candidates = [c for c in candidates if c["edge"] is not None]
+
+    if priced_candidates:
+        best = max(priced_candidates, key=lambda c: c["edge"])
+
+        if best["edge"] <= 0:
+            best = max(candidates, key=lambda c: c["model_prob"])
+    else:
+        best = max(candidates, key=lambda c: c["model_prob"])
+
+    best["grade"] = grade_edge(best["edge"])
+
+    game_rows.append(best)
+
+
+board = pd.DataFrame(game_rows)
+all_sides = pd.DataFrame(all_side_rows)
+
+board["grade_sort"] = board["grade"].apply(grade_sort_value)
+
+if board["edge"].notna().any():
+    board = board.sort_values(
+        ["grade_sort", "edge", "model_prob"],
+        ascending=[False, False, False],
+    )
+else:
+    board = board.sort_values("model_prob", ascending=False)
+
+
+# =========================
+# KPI Cards
+# =========================
+
+total_games = len(today_games)
+a_count = int((board["grade"] == "A").sum())
+positive_edges = int((board["edge"].fillna(-1) > 0).sum())
+top_model_prob = float(board["model_prob"].max())
+
+c1, c2, c3, c4 = st.columns(4)
+
+with c1:
+    st.markdown(
+        f"""
+        <div class="metric-card">
+            <div class="small-label">Games Scored</div>
+            <div class="big-number">{total_games}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with c2:
+    st.markdown(
+        f"""
+        <div class="metric-card">
+            <div class="small-label">Tier A Candidates</div>
+            <div class="big-number">{a_count}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with c3:
+    st.markdown(
+        f"""
+        <div class="metric-card">
+            <div class="small-label">Positive Edges</div>
+            <div class="big-number">{positive_edges}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with c4:
+    st.markdown(
+        f"""
+        <div class="metric-card">
+            <div class="small-label">Top Model Probability</div>
+            <div class="big-number">{top_model_prob:.1%}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# =========================
+# Display Board
+# =========================
+
+st.subheader("Moneyline Board")
+
+display_board = board.copy()
+
+display_board["Model Prob"] = display_board["model_prob"].apply(format_percent)
+display_board["Fair ML"] = display_board["fair_ml"].apply(format_moneyline)
+display_board["Market ML"] = display_board["market_ml"].apply(format_moneyline)
+display_board["Market Implied"] = display_board["market_prob"].apply(format_percent)
+display_board["Edge"] = display_board["edge"].apply(format_percent)
+
+display_board = display_board[
+    [
+        "grade",
+        "game",
+        "team",
+        "side",
+        "opponent",
+        "Model Prob",
+        "Fair ML",
+        "Market ML",
+        "Market Implied",
+        "Edge",
+        "probable_pitcher",
+    ]
+].rename(
+    columns={
+        "grade": "Tier",
+        "game": "Game",
+        "team": "Model Side",
+        "side": "Home/Away",
+        "opponent": "Opponent",
+        "probable_pitcher": "Probable Pitcher",
+    }
+)
+
+st.dataframe(
+    display_board,
+    use_container_width=True,
+    hide_index=True,
+)
+
+
+with st.expander("Show both sides for every game"):
+    side_display = all_sides.copy()
+    side_display["Grade"] = side_display["edge"].apply(grade_edge)
+    side_display["Model Prob"] = side_display["model_prob"].apply(format_percent)
+    side_display["Fair ML"] = side_display["fair_ml"].apply(format_moneyline)
+    side_display["Market ML"] = side_display["market_ml"].apply(format_moneyline)
+    side_display["Market Implied"] = side_display["market_prob"].apply(format_percent)
+    side_display["Edge"] = side_display["edge"].apply(format_percent)
+
+    side_display = side_display[
+        [
+            "Grade",
+            "game",
+            "team",
+            "side",
+            "opponent",
+            "Model Prob",
+            "Fair ML",
+            "Market ML",
+            "Market Implied",
+            "Edge",
+            "probable_pitcher",
+        ]
+    ].rename(
+        columns={
+            "game": "Game",
+            "team": "Team",
+            "side": "Home/Away",
+            "opponent": "Opponent",
+            "probable_pitcher": "Probable Pitcher",
+        }
+    )
+
+    st.dataframe(
+        side_display,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+st.divider()
+
+st.caption(
+    "Important: v1.0 uses the validated production research model. "
+    "Market odds are not used to create the prediction; odds are only used afterward "
+    "to compare price vs probability."
+)

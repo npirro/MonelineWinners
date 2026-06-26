@@ -17,7 +17,7 @@ import streamlit as st
 # =========================
 
 st.set_page_config(
-    page_title="Moneyline Winners v1.0.1",
+    page_title="Moneyline Winners v1.0.2",
     page_icon="⚾",
     layout="wide",
 )
@@ -85,7 +85,7 @@ st.markdown(
             padding: 18px;
             margin-bottom: 16px;
             box-shadow: 0 0 18px rgba(0,0,0,0.28);
-            min-height: 315px;
+            min-height: 375px;
         }
 
         .game-title {
@@ -99,6 +99,18 @@ st.markdown(
             font-size: 13px;
             color: #b8c7d9;
             margin-bottom: 14px;
+        }
+
+        .rank-badge {
+            display: inline-block;
+            color: #07111f;
+            background: #8fd3ff;
+            border-radius: 999px;
+            padding: 3px 9px;
+            font-size: 12px;
+            font-weight: 900;
+            margin-right: 8px;
+            vertical-align: middle;
         }
 
         .model-side {
@@ -145,6 +157,21 @@ st.markdown(
             font-weight: 800;
             color: #eaf2ff;
             overflow-wrap: anywhere;
+        }
+
+        .why-box {
+            background-color: rgba(255,255,255,0.035);
+            border: 1px solid rgba(143,211,255,0.12);
+            border-radius: 12px;
+            padding: 10px 12px;
+            margin-top: 10px;
+        }
+
+        .why-line {
+            color: #dceaff;
+            font-size: 13px;
+            margin-top: 4px;
+            line-height: 1.35;
         }
 
         .status-row {
@@ -319,7 +346,7 @@ def grade_lineup_status(status):
     return "pill-bad"
 
 
-def grade_confidence(prob):
+def grade_model_tier(prob):
     if prob >= 0.58:
         return "A"
     if prob >= 0.56:
@@ -329,10 +356,10 @@ def grade_confidence(prob):
     return "Lean"
 
 
-def confidence_class(confidence):
-    if confidence == "A":
+def tier_class(model_tier):
+    if model_tier == "A":
         return "pill-good"
-    if confidence in {"B", "C"}:
+    if model_tier in {"B", "C"}:
         return "pill-info"
     return "pill-warn"
 
@@ -345,6 +372,40 @@ def lineup_sort_value(status):
         "Unknown": 0,
     }
     return order.get(status, 0)
+
+
+def build_reasons(features, selected_side):
+    reasons = []
+
+    side_is_home = selected_side == "Home"
+
+    def favors_selected(value, home_positive=True):
+        if home_positive:
+            return value > 0 if side_is_home else value < 0
+        return value < 0 if side_is_home else value > 0
+
+    checks = [
+        ("Win rate edge", features.get("win_pct_diff", 0), 0.025, True),
+        ("Run differential edge", features.get("run_diff_per_game_diff", 0), 0.15, True),
+        ("Better scoring profile", features.get("rpg_diff", 0), 0.20, True),
+        ("Better run prevention", features.get("rapg_diff", 0), 0.20, True),
+        ("Recent form edge", features.get("recent_win_pct_diff", 0), 0.10, True),
+        ("Recent offense edge", features.get("recent_rpg_diff", 0), 0.30, True),
+
+        # recent_rapg_diff = home recent runs allowed - away recent runs allowed.
+        # Lower is better for home, higher is better for away.
+        ("Recent run prevention edge", features.get("recent_rapg_diff", 0), 0.30, False),
+    ]
+
+    for label, value, threshold, home_positive in checks:
+        if abs(value) >= threshold and favors_selected(value, home_positive=home_positive):
+            reasons.append(label)
+
+    if not reasons:
+        reasons.append("Narrow model edge")
+        reasons.append("No major single-driver advantage")
+
+    return reasons[:3]
 
 
 # =========================
@@ -678,20 +739,52 @@ def fetch_moneyline_odds(api_key):
 # Card Rendering
 # =========================
 
-def render_game_card(row):
+def render_game_card(row, show_market_data=False):
     lineup_status = row.get("lineup_status", "Unknown")
     lineup_class = grade_lineup_status(lineup_status)
 
-    confidence = row.get("confidence", "Lean")
-    confidence_class_name = confidence_class(confidence)
+    model_tier = row.get("model_tier", "Lean")
+    model_tier_class_name = tier_class(model_tier)
 
     edge = row.get("edge")
-    edge_text = format_percent(edge) if edge is not None and not pd.isna(edge) else "—"
+    price_gap_text = format_percent(edge) if edge is not None and not pd.isna(edge) else "—"
+
+    rank = row.get("rank", None)
+
+    if rank is not None and not pd.isna(rank):
+        title_html = f'<span class="rank-badge">#{int(rank)}</span>{h(row["game"])}'
+    else:
+        title_html = h(row["game"])
+
+    if show_market_data:
+        box_1_label = "Fair ML"
+        box_1_value = format_moneyline(row["fair_ml"])
+        box_2_label = "Market ML"
+        box_2_value = format_moneyline(row["market_ml"])
+        box_3_label = "Price Gap"
+        box_3_value = price_gap_text
+        box_4_label = "Pitcher"
+        box_4_value = row["probable_pitcher"]
+    else:
+        box_1_label = "Fair ML"
+        box_1_value = format_moneyline(row["fair_ml"])
+        box_2_label = "Pitcher"
+        box_2_value = row["probable_pitcher"]
+        box_3_label = "Lineups"
+        box_3_value = lineup_status
+        box_4_label = "Model Tier"
+        box_4_value = model_tier
+
+    reasons = row.get("reasons", [])
+    if not isinstance(reasons, list):
+        reasons = []
+
+    reason_html = "<br>".join([f"• {h(reason)}" for reason in reasons[:3]])
 
     html = "\n".join(
         [
             '<div class="game-card">',
-            f'<div class="game-title">{h(row["game"])}</div>',
+            f'<div class="game-title">{title_html}</div>',
             f'<div class="game-subtitle">{h(row["game_time_et"])} ET • {h(row["status"])}</div>',
             '<div class="small-label">Model Winner</div>',
             f'<div class="model-side">{h(row["team"])}</div>',
@@ -699,25 +792,29 @@ def render_game_card(row):
             f'<div class="model-prob">{h(format_percent(row["model_prob"]))}</div>',
             '<div class="mini-grid">',
             '<div class="mini-box">',
-            '<div class="small-label">Fair ML</div>',
-            f'<div class="mini-value">{h(format_moneyline(row["fair_ml"]))}</div>',
+            f'<div class="small-label">{h(box_1_label)}</div>',
+            f'<div class="mini-value">{h(box_1_value)}</div>',
             '</div>',
             '<div class="mini-box">',
-            '<div class="small-label">Market ML</div>',
-            f'<div class="mini-value">{h(format_moneyline(row["market_ml"]))}</div>',
+            f'<div class="small-label">{h(box_2_label)}</div>',
+            f'<div class="mini-value" style="font-size: 14px;">{h(box_2_value)}</div>',
             '</div>',
             '<div class="mini-box">',
-            '<div class="small-label">Edge</div>',
-            f'<div class="mini-value">{h(edge_text)}</div>',
+            f'<div class="small-label">{h(box_3_label)}</div>',
+            f'<div class="mini-value">{h(box_3_value)}</div>',
             '</div>',
             '<div class="mini-box">',
-            '<div class="small-label">Pitcher</div>',
-            f'<div class="mini-value" style="font-size: 14px;">{h(row["probable_pitcher"])}</div>',
+            f'<div class="small-label">{h(box_4_label)}</div>',
+            f'<div class="mini-value">{h(box_4_value)}</div>',
             '</div>',
+            '</div>',
+            '<div class="why-box">',
+            '<div class="small-label">Why this side?</div>',
+            f'<div class="why-line">{reason_html}</div>',
             '</div>',
             '<div class="status-row">',
             f'<span class="pill {lineup_class}">Lineups: {h(lineup_status)}</span>',
-            f'<span class="pill {confidence_class_name}">Confidence: {h(confidence)}</span>',
+            f'<span class="pill {model_tier_class_name}">Model Tier: {h(model_tier)}</span>',
             f'<span class="pill pill-info">{h(row["side"])}</span>',
             '</div>',
             '</div>',
@@ -727,7 +824,7 @@ def render_game_card(row):
     st.markdown(html, unsafe_allow_html=True)
 
 
-def render_card_grid(df, columns=3):
+def render_card_grid(df, columns=3, show_market_data=False):
     if df.empty:
         st.info("No games in this section.")
         return
@@ -736,17 +833,19 @@ def render_card_grid(df, columns=3):
 
     for idx, (_, row) in enumerate(df.iterrows()):
         with cols[idx % columns]:
-            render_game_card(row)
+            render_game_card(row, show_market_data=show_market_data)
 
 
 # =========================
 # App
 # =========================
 
-st.title("⚾ Moneyline Winners v1.0.1")
+last_updated_et = datetime.now(ZoneInfo("America/New_York")).strftime("%I:%M %p ET")
+
+st.title("⚾ Moneyline Winners v1.0.2")
 st.caption(
-    "Production Model v1 — validated team-only logistic model. "
-    "Card UI, lineup confirmation, and pregame board."
+    f"Production Model v1 — validated team-only logistic model. "
+    f"Last updated: {last_updated_et}."
 )
 
 model, model_features = load_model_artifact()
@@ -761,14 +860,23 @@ with st.sidebar:
         value=today_et,
     )
 
+    show_market_data = st.checkbox(
+        "Show market / price data",
+        value=False,
+        help="Optional overlay. Model winner selection is still based only on win probability.",
+    )
+
     default_odds_key = os.getenv("ODDS_API_KEY", "") or get_secret("ODDS_API_KEY")
 
-    odds_api_key = st.text_input(
-        "Odds API Key",
-        value=default_odds_key,
-        type="password",
-        help="Optional. Leave blank to show model probabilities without market prices.",
-    )
+    odds_api_key = ""
+
+    if show_market_data:
+        odds_api_key = st.text_input(
+            "Odds API Key",
+            value=default_odds_key,
+            type="password",
+            help="Optional. Used only for market price display.",
+        )
 
     hide_final_games = st.checkbox(
         "Hide final games on game day",
@@ -790,9 +898,12 @@ with st.sidebar:
     st.write("Production Feature Set:")
     st.code(", ".join(model_features), language="text")
 
+    st.write("### Last Updated")
+    st.write(last_updated_et)
+
     st.write("### Notes")
     st.write(
-        "v1.0.1 changes the product interface only. "
+        "v1.0.2 changes the product interface only. "
         "The prediction model remains Production v1 team-only. "
         "Model winner selection is based on win probability, not odds."
     )
@@ -826,7 +937,7 @@ except Exception as e:
 team_states = build_team_states(history_games)
 
 try:
-    odds_by_team = fetch_moneyline_odds(odds_api_key)
+    odds_by_team = fetch_moneyline_odds(odds_api_key) if show_market_data else {}
 except Exception as e:
     odds_by_team = {}
     st.warning(f"Odds download failed. Showing model-only board. Error: {e}")
@@ -906,6 +1017,9 @@ for game in visible_games:
     game_time_et = get_game_time_et(game)
     lineup_status = get_lineup_status(game.get("gamePk"))
 
+    home_reasons = build_reasons(features, "Home")
+    away_reasons = build_reasons(features, "Away")
+
     candidates = [
         {
             "game": game_label,
@@ -923,7 +1037,8 @@ for game in visible_games:
             "game_time_et": game_time_et,
             "lineup_status": lineup_status,
             "is_pregame": is_pregame(game),
-            "confidence": grade_confidence(home_prob),
+            "model_tier": grade_model_tier(home_prob),
+            "reasons": home_reasons,
         },
         {
             "game": game_label,
@@ -941,7 +1056,8 @@ for game in visible_games:
             "game_time_et": game_time_et,
             "lineup_status": lineup_status,
             "is_pregame": is_pregame(game),
-            "confidence": grade_confidence(away_prob),
+            "model_tier": grade_model_tier(away_prob),
+            "reasons": away_reasons,
         },
     ]
 
@@ -965,12 +1081,16 @@ pregame_board = board[board["is_pregame"] == True].copy()
 best_available = pregame_board.sort_values(
     ["model_prob", "lineup_sort"],
     ascending=[False, False],
-).head(6)
+).head(6).copy()
+
+best_available["rank"] = range(1, len(best_available) + 1)
 
 pregame_board = pregame_board.sort_values(
     ["model_prob", "lineup_sort"],
     ascending=[False, False],
-)
+).copy()
+
+pregame_board["rank"] = None
 
 
 # =========================
@@ -1022,7 +1142,7 @@ with c4:
     st.markdown(
         f"""
         <div class="metric-card">
-            <div class="small-label">High Confidence</div>
+            <div class="small-label">B+ Model Sides</div>
             <div class="big-number">{high_confidence}</div>
         </div>
         """,
@@ -1047,12 +1167,12 @@ with c5:
 
 st.subheader("Best Available Winners")
 st.caption("Pregame games only. Sorted by model win probability. Odds do not drive the prediction.")
-render_card_grid(best_available, columns=3)
+render_card_grid(best_available, columns=3, show_market_data=show_market_data)
 
 st.divider()
 
-st.subheader("Pregame Board")
-render_card_grid(pregame_board, columns=3)
+st.subheader("Full Pregame Slate")
+render_card_grid(pregame_board, columns=3, show_market_data=show_market_data)
 
 
 # =========================
@@ -1066,28 +1186,36 @@ with st.expander("Show table view"):
     display_board["Fair ML"] = display_board["fair_ml"].apply(format_moneyline)
     display_board["Market ML"] = display_board["market_ml"].apply(format_moneyline)
     display_board["Market Implied"] = display_board["market_prob"].apply(format_percent)
-    display_board["Edge"] = display_board["edge"].apply(format_percent)
+    display_board["Price Gap"] = display_board["edge"].apply(format_percent)
+    display_board["Why"] = display_board["reasons"].apply(
+        lambda xs: " | ".join(xs) if isinstance(xs, list) else ""
+    )
 
-    display_board = display_board[
-        [
-            "confidence",
-            "game",
-            "team",
-            "side",
-            "opponent",
-            "Model Prob",
-            "Fair ML",
-            "Market ML",
-            "Market Implied",
-            "Edge",
-            "lineup_status",
-            "probable_pitcher",
-            "status",
-            "game_time_et",
-        ]
-    ].rename(
+    base_cols = [
+        "model_tier",
+        "game",
+        "team",
+        "side",
+        "opponent",
+        "Model Prob",
+        "Fair ML",
+        "lineup_status",
+        "probable_pitcher",
+        "Why",
+        "status",
+        "game_time_et",
+    ]
+
+    market_cols = ["Market ML", "Market Implied", "Price Gap"]
+
+    if show_market_data:
+        final_cols = base_cols[:7] + market_cols + base_cols[7:]
+    else:
+        final_cols = base_cols
+
+    display_board = display_board[final_cols].rename(
         columns={
-            "confidence": "Confidence",
+            "model_tier": "Model Tier",
             "game": "Game",
             "team": "Model Winner",
             "side": "Home/Away",
@@ -1112,28 +1240,36 @@ with st.expander("Show both sides for every visible game"):
     side_display["Fair ML"] = side_display["fair_ml"].apply(format_moneyline)
     side_display["Market ML"] = side_display["market_ml"].apply(format_moneyline)
     side_display["Market Implied"] = side_display["market_prob"].apply(format_percent)
-    side_display["Edge"] = side_display["edge"].apply(format_percent)
+    side_display["Price Gap"] = side_display["edge"].apply(format_percent)
+    side_display["Why"] = side_display["reasons"].apply(
+        lambda xs: " | ".join(xs) if isinstance(xs, list) else ""
+    )
 
-    side_display = side_display[
-        [
-            "confidence",
-            "game",
-            "team",
-            "side",
-            "opponent",
-            "Model Prob",
-            "Fair ML",
-            "Market ML",
-            "Market Implied",
-            "Edge",
-            "lineup_status",
-            "probable_pitcher",
-            "status",
-            "game_time_et",
-        ]
-    ].rename(
+    base_cols = [
+        "model_tier",
+        "game",
+        "team",
+        "side",
+        "opponent",
+        "Model Prob",
+        "Fair ML",
+        "lineup_status",
+        "probable_pitcher",
+        "Why",
+        "status",
+        "game_time_et",
+    ]
+
+    market_cols = ["Market ML", "Market Implied", "Price Gap"]
+
+    if show_market_data:
+        final_cols = base_cols[:7] + market_cols + base_cols[7:]
+    else:
+        final_cols = base_cols
+
+    side_display = side_display[final_cols].rename(
         columns={
-            "confidence": "Confidence",
+            "model_tier": "Model Tier",
             "game": "Game",
             "team": "Team",
             "side": "Home/Away",
@@ -1155,7 +1291,7 @@ with st.expander("Show both sides for every visible game"):
 st.divider()
 
 st.caption(
-    "Important: v1.0.1 changes the interface only. "
+    "Important: v1.0.2 changes the interface only. "
     "The prediction model remains the validated team-only Production v1 model. "
-    "Market odds are not used to create the prediction."
+    "Market odds are optional display data and are not used to create the prediction."
 )

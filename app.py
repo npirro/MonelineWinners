@@ -17,7 +17,7 @@ import streamlit as st
 # =========================
 
 st.set_page_config(
-    page_title="Moneyline Winners v1.1",
+    page_title="Moneyline Winners v1.1.1",
     page_icon="⚾",
     layout="wide",
 )
@@ -94,6 +94,17 @@ MANUAL_VENUE_COORDS = {
     "citizens bank park": (39.9061, -75.1665),
     "nationals park": (38.8730, -77.0074),
 }
+
+
+# =========================
+# Session State
+# =========================
+
+if "tracked_games" not in st.session_state:
+    st.session_state["tracked_games"] = []
+
+if "tracked_game_meta" not in st.session_state:
+    st.session_state["tracked_game_meta"] = {}
 
 
 # =========================
@@ -262,6 +273,113 @@ st.markdown(
             font-size: 34px;
             font-weight: 800;
             color: #8fd3ff;
+        }
+
+        .track-box {
+            background: rgba(143,211,255,0.08);
+            border: 1px solid rgba(143,211,255,0.14);
+            border-radius: 14px;
+            padding: 8px 10px 4px 10px;
+            margin-bottom: 7px;
+        }
+
+        .tracker-card {
+            background: linear-gradient(135deg, #0d1b2e, #102944);
+            border: 1px solid #1f456e;
+            border-radius: 20px;
+            padding: 16px 16px 14px 16px;
+            margin-bottom: 16px;
+            box-shadow: 0 0 18px rgba(0,0,0,0.28);
+            min-height: 230px;
+        }
+
+        .tracker-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 10px;
+            align-items: flex-start;
+        }
+
+        .tracker-game {
+            color: #eaf2ff;
+            font-size: 16px;
+            font-weight: 900;
+            line-height: 1.15;
+        }
+
+        .tracker-status {
+            color: #8fd3ff;
+            font-size: 12px;
+            font-weight: 900;
+            text-align: right;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            min-width: 90px;
+        }
+
+        .tracker-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+
+        .tracker-team {
+            color: #eaf2ff;
+            font-size: 20px;
+            font-weight: 900;
+        }
+
+        .tracker-score {
+            color: #ffffff;
+            font-size: 28px;
+            font-weight: 950;
+        }
+
+        .tracker-meta {
+            margin-top: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(255,255,255,0.045);
+            border: 1px solid rgba(143,211,255,0.16);
+            border-radius: 14px;
+            padding: 10px 12px;
+        }
+
+        .tracker-progress {
+            color: #ffffff;
+            font-size: 16px;
+            font-weight: 900;
+        }
+
+        .tracker-outs {
+            color: #b8c7d9;
+            font-size: 13px;
+            font-weight: 700;
+            margin-top: 2px;
+        }
+
+        .tracker-model-line {
+            margin-top: 12px;
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+            color: #dceaff;
+            font-size: 13px;
+            font-weight: 800;
+        }
+
+        .tracker-empty {
+            background: rgba(143,211,255,0.08);
+            border: 1px dashed rgba(143,211,255,0.30);
+            border-radius: 18px;
+            padding: 22px;
+            color: #dceaff;
+            font-weight: 750;
         }
 
         div[data-testid="stDataFrame"] {
@@ -512,6 +630,63 @@ def lineup_sort_value(status):
 
 
 # =========================
+# Tracking Helpers
+# =========================
+
+def get_game_id_from_row(row):
+    if "game_pk" in row and pd.notna(row["game_pk"]):
+        return str(safe_int(row["game_pk"]))
+    if "Game_PK" in row and pd.notna(row["Game_PK"]):
+        return str(safe_int(row["Game_PK"]))
+    return str(row.get("game", ""))
+
+
+def get_game_id_from_game(game):
+    return str(safe_int(game.get("gamePk")))
+
+
+def is_game_tracked(game_id):
+    game_id = str(game_id)
+    return game_id in set(str(x) for x in st.session_state.get("tracked_games", []))
+
+
+def update_tracked_games(game_id, checked, row=None):
+    game_id = str(game_id)
+    tracked = set(str(x) for x in st.session_state.get("tracked_games", []))
+    meta = dict(st.session_state.get("tracked_game_meta", {}))
+
+    if checked:
+        tracked.add(game_id)
+
+        if row is not None:
+            meta[game_id] = {
+                "game": str(row.get("game", "")),
+                "team": str(row.get("team", "—")),
+                "team_full": str(row.get("team_full", row.get("team", "—"))),
+                "side": str(row.get("side", "—")),
+                "model_prob": float(row.get("model_prob", 0.0)) if pd.notna(row.get("model_prob", None)) else None,
+                "fair_ml": row.get("fair_ml", None),
+                "probable_pitcher": str(row.get("probable_pitcher", "TBD")),
+                "tracked_at_et": datetime.now(ZoneInfo("America/New_York")).strftime("%I:%M %p ET"),
+            }
+    else:
+        tracked.discard(game_id)
+        meta.pop(game_id, None)
+
+    st.session_state["tracked_games"] = sorted(tracked)
+    st.session_state["tracked_game_meta"] = meta
+
+
+def clear_tracked_games():
+    st.session_state["tracked_games"] = []
+    st.session_state["tracked_game_meta"] = {}
+
+
+def get_tracked_meta(game_id):
+    return st.session_state.get("tracked_game_meta", {}).get(str(game_id), {})
+
+
+# =========================
 # Model Loading
 # =========================
 
@@ -583,6 +758,22 @@ def fetch_schedule_range(start_day, end_day):
     r = requests.get(f"{MLB_BASE}/schedule", params=params, timeout=60)
     r.raise_for_status()
     return r.json()
+
+
+@st.cache_data(ttl=30)
+def fetch_scoreboard_games(slate_date):
+    params = {
+        "sportId": 1,
+        "startDate": str(slate_date),
+        "endDate": str(slate_date),
+        "gameTypes": "R",
+        "hydrate": "team,venue,linescore,probablePitcher",
+    }
+
+    r = requests.get(f"{MLB_BASE}/schedule", params=params, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    return flatten_games(data)
 
 
 def flatten_games(schedule_json):
@@ -1312,6 +1503,173 @@ def get_env_temp_for_game(game):
 
 
 # =========================
+# Live Outcome Tracker
+# =========================
+
+def get_scoreboard_team(game, side):
+    team = game.get("teams", {}).get(side, {})
+    team_obj = team.get("team", {})
+    return team_obj.get("abbreviation") or team_obj.get("teamName") or team_obj.get("name", side.title())
+
+
+def get_scoreboard_score(game, side):
+    score = game.get("teams", {}).get(side, {}).get("score")
+    if score is None:
+        return "—"
+    return str(score)
+
+
+def get_game_progress(game):
+    status = get_game_status(game)
+    linescore = game.get("linescore", {}) or {}
+
+    if status in FINAL_STATES:
+        return "Final", ""
+
+    current_inning = linescore.get("currentInning")
+    inning_state = linescore.get("inningState", "")
+    outs = linescore.get("outs", None)
+
+    if current_inning:
+        inning_text = f"{inning_state} {current_inning}".strip()
+        if outs is None:
+            outs_text = ""
+        elif int(outs) == 1:
+            outs_text = "1 Out"
+        else:
+            outs_text = f"{int(outs)} Outs"
+        return inning_text, outs_text
+
+    if status in {"Scheduled", "Pre-Game", "Warmup"}:
+        return f"{get_game_time_et(game)} ET", status
+
+    return status, ""
+
+
+def get_bases_html(game):
+    linescore = game.get("linescore", {}) or {}
+    offense = linescore.get("offense", {}) or {}
+
+    on_first = offense.get("first") is not None
+    on_second = offense.get("second") is not None
+    on_third = offense.get("third") is not None
+
+    def diamond(filled):
+        if filled:
+            return '<span style="color:#7CFFB2;font-size:1.05rem;">◆</span>'
+        return '<span style="color:#64748b;font-size:1.05rem;">◇</span>'
+
+    return f"""
+    <div style="line-height:1.0;text-align:center;min-width:44px;">
+        <div>{diamond(on_second)}</div>
+        <div>{diamond(on_third)} {diamond(on_first)}</div>
+    </div>
+    """
+
+
+def build_tracked_games_for_display(slate_date):
+    tracked_ids = set(str(x) for x in st.session_state.get("tracked_games", []))
+
+    if not tracked_ids:
+        return []
+
+    games = fetch_scoreboard_games(slate_date)
+    tracked_games = [g for g in games if get_game_id_from_game(g) in tracked_ids]
+
+    tracked_games = sorted(tracked_games, key=lambda g: g.get("gameDate", ""))
+    return tracked_games
+
+
+def render_live_tracker_card(game):
+    game_id = get_game_id_from_game(game)
+    meta = get_tracked_meta(game_id)
+
+    away_abbr = get_scoreboard_team(game, "away")
+    home_abbr = get_scoreboard_team(game, "home")
+
+    away_score = get_scoreboard_score(game, "away")
+    home_score = get_scoreboard_score(game, "home")
+
+    status = get_game_status(game)
+    progress_text, outs_text = get_game_progress(game)
+    bases_html = get_bases_html(game)
+
+    game_label = meta.get("game") or f"{away_abbr} @ {home_abbr}"
+    pick_team = meta.get("team", "—")
+    model_prob = meta.get("model_prob", None)
+    prob_text = format_percent(model_prob) if model_prob is not None else "—"
+    tracked_at = meta.get("tracked_at_et", "—")
+
+    html = f"""
+    <div class="tracker-card">
+        <div class="tracker-head">
+            <div class="tracker-game">{h(game_label)}</div>
+            <div class="tracker-status">{h(status)}</div>
+        </div>
+
+        <div class="tracker-row">
+            <div class="tracker-team">{h(away_abbr)}</div>
+            <div class="tracker-score">{h(away_score)}</div>
+        </div>
+
+        <div class="tracker-row">
+            <div class="tracker-team">{h(home_abbr)}</div>
+            <div class="tracker-score">{h(home_score)}</div>
+        </div>
+
+        <div class="tracker-meta">
+            <div>
+                <div class="tracker-progress">{h(progress_text)}</div>
+                <div class="tracker-outs">{h(outs_text)}</div>
+            </div>
+            <div>{bases_html}</div>
+        </div>
+
+        <div class="tracker-model-line">
+            <span><b>Model Pick:</b> {h(pick_team)}</span>
+            <span><b>Win Prob:</b> {h(prob_text)}</span>
+            <span><b>Tracked:</b> {h(tracked_at)}</span>
+        </div>
+    </div>
+    """
+
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def render_tracker_grid(slate_date):
+    tracked_games = build_tracked_games_for_display(slate_date)
+
+    if not tracked_games:
+        st.markdown(
+            """
+            <div class="tracker-empty">
+                No tracked games yet. Go to the Winner Board and check <b>Track?</b> on any game you want to follow live.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+
+    cols_per_row = 3
+
+    for start in range(0, len(tracked_games), cols_per_row):
+        cols = st.columns(cols_per_row)
+        chunk = tracked_games[start:start + cols_per_row]
+
+        for col, game in zip(cols, chunk):
+            with col:
+                game_id = get_game_id_from_game(game)
+                untrack = st.checkbox(
+                    "Tracking",
+                    value=True,
+                    key=f"tracker_untrack_{game_id}",
+                    help="Uncheck to remove this game from the tracker.",
+                )
+                update_tracked_games(game_id, untrack)
+                render_live_tracker_card(game)
+
+
+# =========================
 # Odds
 # =========================
 
@@ -1482,7 +1840,29 @@ def render_game_card(row, show_market_data=False):
     st.markdown(html, unsafe_allow_html=True)
 
 
-def render_card_grid(df, columns=3, show_market_data=False):
+def render_track_control(row, section_key):
+    game_id = get_game_id_from_row(row)
+
+    st.markdown('<div class="track-box">', unsafe_allow_html=True)
+
+    checked = st.checkbox(
+        "Track?",
+        value=is_game_tracked(game_id),
+        key=f"track_{section_key}_{game_id}",
+        help="Add this game to the Live Outcome Tracker tab.",
+    )
+
+    update_tracked_games(game_id, checked, row=row)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_game_card_with_tracker(row, section_key, show_market_data=False):
+    render_track_control(row, section_key)
+    render_game_card(row, show_market_data=show_market_data)
+
+
+def render_card_grid(df, columns=3, show_market_data=False, section_key="board"):
     if df.empty:
         st.info("No games in this section.")
         return
@@ -1491,7 +1871,11 @@ def render_card_grid(df, columns=3, show_market_data=False):
 
     for idx, (_, row) in enumerate(df.iterrows()):
         with cols[idx % columns]:
-            render_game_card(row, show_market_data=show_market_data)
+            render_game_card_with_tracker(
+                row,
+                section_key=f"{section_key}_{idx}",
+                show_market_data=show_market_data,
+            )
 
 
 # =========================
@@ -1500,10 +1884,10 @@ def render_card_grid(df, columns=3, show_market_data=False):
 
 last_updated_et = datetime.now(ZoneInfo("America/New_York")).strftime("%I:%M %p ET")
 
-st.title("⚾ Moneyline Winners v1.1")
+st.title("⚾ Moneyline Winners v1.1.1")
 st.caption(
     f"Production Model v1.1 — team strength + weather + opponent-adjusted offense + hand-matchup sample. "
-    f"Last updated: {last_updated_et}."
+    f"UI v1.1.1 adds Live Outcome Tracker. Last updated: {last_updated_et}."
 )
 
 model, model_features, model_version, model_artifact = load_model_artifact()
@@ -1548,6 +1932,16 @@ with st.sidebar:
 
     if st.button("Refresh Data"):
         st.cache_data.clear()
+        st.rerun()
+
+    st.divider()
+
+    st.write("### Live Outcome Tracker")
+    st.write(f"Tracked games: **{len(st.session_state.get('tracked_games', []))}**")
+
+    if st.button("Clear Tracked Games", use_container_width=True):
+        clear_tracked_games()
+        st.success("Tracked games cleared.")
         st.rerun()
 
     st.divider()
@@ -1611,12 +2005,12 @@ for game in today_games:
 
 if not visible_games:
     st.warning("No available pregame MLB games found for the selected date.")
-    st.stop()
+    st.info("Tracked games can still be viewed in the Live Outcome Tracker if you already added them earlier.")
 
 
 all_pitcher_ids = []
 
-for game in history_games + visible_games:
+for game in history_games + today_games:
     all_pitcher_ids.append(get_probable_pitcher_id(game, "home"))
     all_pitcher_ids.append(get_probable_pitcher_id(game, "away"))
 
@@ -1643,10 +2037,12 @@ except Exception as e:
 
 game_rows = []
 all_side_rows = []
-
 weather_sources = []
 
+
 for game in visible_games:
+    game_pk = safe_int(game.get("gamePk"))
+
     home_team_id = get_team_id(game, "home")
     away_team_id = get_team_id(game, "away")
 
@@ -1728,6 +2124,7 @@ for game in visible_games:
 
     candidates = [
         {
+            "game_pk": game_pk,
             "game": game_label,
             "team": home_abbr,
             "team_full": home_name,
@@ -1755,6 +2152,7 @@ for game in visible_games:
             "away_starter_hand": away_starter_hand,
         },
         {
+            "game_pk": game_pk,
             "game": game_label,
             "team": away_abbr,
             "team_full": away_name,
@@ -1796,6 +2194,22 @@ for game in visible_games:
 board = pd.DataFrame(game_rows)
 all_sides = pd.DataFrame(all_side_rows)
 
+if board.empty:
+    board = pd.DataFrame(
+        columns=[
+            "game_pk", "game", "team", "team_full", "opponent", "side",
+            "model_prob", "fair_ml", "market_ml", "market_prob", "edge",
+            "probable_pitcher", "status", "game_time_et", "lineup_status",
+            "is_pregame", "model_tier", "reasons", "env_temp",
+            "env_temp_source", "opp_adj_offense_diff",
+            "vs_hand_games_scaled_diff", "home_vs_hand_games",
+            "away_vs_hand_games", "home_starter_hand", "away_starter_hand",
+        ]
+    )
+
+if all_sides.empty:
+    all_sides = board.copy()
+
 board["lineup_sort"] = board["lineup_status"].apply(lineup_sort_value)
 
 pregame_board = board[board["is_pregame"] == True].copy()
@@ -1821,13 +2235,13 @@ pregame_board["rank"] = None
 
 total_games = len(today_games)
 available_games = len(visible_games)
-confirmed_lineups = int((board["lineup_status"] == "Confirmed").sum())
-high_confidence = int((board["model_prob"] >= 0.56).sum())
-top_model_prob = float(board["model_prob"].max())
+confirmed_lineups = int((board["lineup_status"] == "Confirmed").sum()) if not board.empty else 0
+high_confidence = int((board["model_prob"] >= 0.56).sum()) if not board.empty else 0
+top_model_prob = float(board["model_prob"].max()) if not board.empty else 0.0
+tracked_count = len(st.session_state.get("tracked_games", []))
 
-real_weather_count = int(
-    ~board["env_temp_source"].astype(str).str.contains("default", case=False, na=False).sum()
-)
+weather_real_mask = ~board["env_temp_source"].astype(str).str.contains("default", case=False, na=False) if not board.empty else pd.Series([], dtype=bool)
+real_weather_count = int(weather_real_mask.sum()) if not board.empty else 0
 
 c1, c2, c3, c4, c5 = st.columns(5)
 
@@ -1857,8 +2271,8 @@ with c3:
     st.markdown(
         f"""
         <div class="metric-card">
-            <div class="small-label">Confirmed Lineups</div>
-            <div class="big-number">{confirmed_lineups}</div>
+            <div class="small-label">Tracked Games</div>
+            <div class="big-number">{tracked_count}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1888,20 +2302,54 @@ with c5:
 
 
 # =========================
-# Board
+# Main Tabs
 # =========================
 
-st.subheader("Best Available Winners")
-st.caption(
-    "Pregame games only. Sorted by model win probability. "
-    "Odds do not drive the prediction."
-)
-render_card_grid(best_available, columns=3, show_market_data=show_market_data)
+winner_tab, tracker_tab = st.tabs(["Winner Board", "Live Outcome Tracker"])
 
-st.divider()
+with winner_tab:
+    st.subheader("Best Available Winners")
+    st.caption(
+        "Pregame games only. Sorted by model win probability. "
+        "Use Track? to add games to the Live Outcome Tracker. "
+        "Odds do not drive the prediction."
+    )
+    render_card_grid(
+        best_available,
+        columns=3,
+        show_market_data=show_market_data,
+        section_key="best_available",
+    )
 
-st.subheader("Full Pregame Slate")
-render_card_grid(pregame_board, columns=3, show_market_data=show_market_data)
+    st.divider()
+
+    st.subheader("Full Pregame Slate")
+    st.caption("Use Track? on any lower-ranked game you still want to follow.")
+    render_card_grid(
+        pregame_board,
+        columns=3,
+        show_market_data=show_market_data,
+        section_key="pregame_board",
+    )
+
+with tracker_tab:
+    st.subheader("Live Outcome Tracker")
+    st.caption(
+        "Only games you marked with Track? appear here. "
+        "This tracker ignores the winner-board hide-live/final filters."
+    )
+
+    tracker_left, tracker_right = st.columns([0.72, 0.28])
+
+    with tracker_left:
+        st.write(f"Tracking **{len(st.session_state.get('tracked_games', []))}** games for {selected_date.isoformat()}.")
+
+    with tracker_right:
+        if st.button("Refresh Tracker", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+
+    render_tracker_grid(selected_date)
 
 
 # =========================
@@ -2068,7 +2516,8 @@ with st.expander("Show both sides for every visible game"):
 st.divider()
 
 st.caption(
-    "Moneyline Winners v1.1. "
+    "Moneyline Winners v1.1.1. "
     "Model winner selection is based only on model win probability. "
-    "Market odds are optional display data and are not used to create the prediction."
+    "Market odds are optional display data and are not used to create the prediction. "
+    "Live Outcome Tracker is for monitoring selected games only."
 )

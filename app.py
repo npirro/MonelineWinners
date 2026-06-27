@@ -385,6 +385,38 @@ st.markdown(
         div[data-testid="stDataFrame"] {
             background-color: #0d1b2e;
         }
+
+        div[data-testid="stButton"] > button,
+        .stButton > button {
+            background: linear-gradient(135deg, #0d1b2e, #102944) !important;
+            color: #eaf2ff !important;
+            border: 1px solid #1f456e !important;
+            border-radius: 14px !important;
+            font-weight: 900 !important;
+            box-shadow: 0 0 12px rgba(0,0,0,0.18) !important;
+        }
+
+        div[data-testid="stButton"] > button:hover,
+        .stButton > button:hover {
+            background: linear-gradient(135deg, #12345a, #15517f) !important;
+            color: #ffffff !important;
+            border: 1px solid #8fd3ff !important;
+        }
+
+        div[data-testid="stButton"] > button:focus,
+        .stButton > button:focus {
+            color: #ffffff !important;
+            border: 1px solid #8fd3ff !important;
+            box-shadow: 0 0 0 2px rgba(143,211,255,0.20) !important;
+        }
+
+        div[data-testid="stButton"] > button:disabled,
+        .stButton > button:disabled {
+            background: rgba(255,255,255,0.08) !important;
+            color: #8ea1b8 !important;
+            border: 1px solid rgba(255,255,255,0.12) !important;
+        }
+
     </style>
     """,
     unsafe_allow_html=True,
@@ -1559,12 +1591,12 @@ def get_bases_html(game):
             return '<span style="color:#7CFFB2;font-size:1.05rem;">◆</span>'
         return '<span style="color:#64748b;font-size:1.05rem;">◇</span>'
 
-    return f"""
-    <div style="line-height:1.0;text-align:center;min-width:44px;">
-        <div>{diamond(on_second)}</div>
-        <div>{diamond(on_third)} {diamond(on_first)}</div>
-    </div>
-    """
+    return (
+        '<div style="line-height:1.0;text-align:center;min-width:44px;">'
+        f'<div>{diamond(on_second)}</div>'
+        f'<div>{diamond(on_third)} {diamond(on_first)}</div>'
+        '</div>'
+    )
 
 
 def build_tracked_games_for_display(slate_date):
@@ -1600,40 +1632,40 @@ def render_live_tracker_card(game):
     prob_text = format_percent(model_prob) if model_prob is not None else "—"
     tracked_at = meta.get("tracked_at_et", "—")
 
-    html = f"""
-    <div class="tracker-card">
-        <div class="tracker-head">
-            <div class="tracker-game">{h(game_label)}</div>
-            <div class="tracker-status">{h(status)}</div>
-        </div>
+    # Build as joined strings instead of an indented triple-quoted block.
+    # Streamlit markdown can treat indented HTML as a code block.
+    card_html = "\n".join(
+        [
+            '<div class="tracker-card">',
+            '<div class="tracker-head">',
+            f'<div class="tracker-game">{h(game_label)}</div>',
+            f'<div class="tracker-status">{h(status)}</div>',
+            '</div>',
+            '<div class="tracker-row">',
+            f'<div class="tracker-team">{h(away_abbr)}</div>',
+            f'<div class="tracker-score">{h(away_score)}</div>',
+            '</div>',
+            '<div class="tracker-row">',
+            f'<div class="tracker-team">{h(home_abbr)}</div>',
+            f'<div class="tracker-score">{h(home_score)}</div>',
+            '</div>',
+            '<div class="tracker-meta">',
+            '<div>',
+            f'<div class="tracker-progress">{h(progress_text)}</div>',
+            f'<div class="tracker-outs">{h(outs_text)}</div>',
+            '</div>',
+            f'<div>{bases_html}</div>',
+            '</div>',
+            '<div class="tracker-model-line">',
+            f'<span><b>Model Pick:</b> {h(pick_team)}</span>',
+            f'<span><b>Win Prob:</b> {h(prob_text)}</span>',
+            f'<span><b>Tracked:</b> {h(tracked_at)}</span>',
+            '</div>',
+            '</div>',
+        ]
+    )
 
-        <div class="tracker-row">
-            <div class="tracker-team">{h(away_abbr)}</div>
-            <div class="tracker-score">{h(away_score)}</div>
-        </div>
-
-        <div class="tracker-row">
-            <div class="tracker-team">{h(home_abbr)}</div>
-            <div class="tracker-score">{h(home_score)}</div>
-        </div>
-
-        <div class="tracker-meta">
-            <div>
-                <div class="tracker-progress">{h(progress_text)}</div>
-                <div class="tracker-outs">{h(outs_text)}</div>
-            </div>
-            <div>{bases_html}</div>
-        </div>
-
-        <div class="tracker-model-line">
-            <span><b>Model Pick:</b> {h(pick_team)}</span>
-            <span><b>Win Prob:</b> {h(prob_text)}</span>
-            <span><b>Tracked:</b> {h(tracked_at)}</span>
-        </div>
-    </div>
-    """
-
-    st.markdown(html, unsafe_allow_html=True)
+    st.markdown(card_html, unsafe_allow_html=True)
 
 
 def render_tracker_grid(slate_date):
@@ -1659,13 +1691,17 @@ def render_tracker_grid(slate_date):
         for col, game in zip(cols, chunk):
             with col:
                 game_id = get_game_id_from_game(game)
-                untrack = st.checkbox(
+                keep_tracking = st.checkbox(
                     "Tracking",
                     value=True,
-                    key=f"tracker_untrack_{game_id}",
+                    key=f"tracker_keep_{game_id}",
                     help="Uncheck to remove this game from the tracker.",
                 )
-                update_tracked_games(game_id, untrack)
+
+                if not keep_tracking:
+                    update_tracked_games(game_id, False)
+                    st.rerun()
+
                 render_live_tracker_card(game)
 
 
@@ -1842,17 +1878,31 @@ def render_game_card(row, show_market_data=False):
 
 def render_track_control(row, section_key):
     game_id = get_game_id_from_row(row)
+    currently_tracked = is_game_tracked(game_id)
 
     st.markdown('<div class="track-box">', unsafe_allow_html=True)
 
+    # Important:
+    # The same game can appear in both Best Available Winners and Full Pregame Slate.
+    # If every unchecked duplicate checkbox is allowed to remove the game, tracking gets erased.
+    # So winner-board checkboxes are ADD-ONLY.
+    # Removal happens from the Live Outcome Tracker tab or sidebar Clear button.
+    widget_state = "tracked" if currently_tracked else "open"
+
     checked = st.checkbox(
         "Track?",
-        value=is_game_tracked(game_id),
-        key=f"track_{section_key}_{game_id}",
-        help="Add this game to the Live Outcome Tracker tab.",
+        value=currently_tracked,
+        key=f"track_{section_key}_{game_id}_{widget_state}",
+        disabled=currently_tracked,
+        help=(
+            "Add this game to the Live Outcome Tracker tab. "
+            "Remove tracked games from the tracker tab or sidebar."
+        ),
     )
 
-    update_tracked_games(game_id, checked, row=row)
+    if checked and not currently_tracked:
+        update_tracked_games(game_id, True, row=row)
+        st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -2345,7 +2395,7 @@ with tracker_tab:
         st.write(f"Tracking **{len(st.session_state.get('tracked_games', []))}** games for {selected_date.isoformat()}.")
 
     with tracker_right:
-        if st.button("Refresh Tracker", use_container_width=True):
+        if st.button("🔄 Refresh Tracker", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
 

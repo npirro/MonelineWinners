@@ -1,10 +1,10 @@
 import os
 import re
+import html as html_lib
 from collections import defaultdict, deque
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
-import html as html_lib
 
 import joblib
 import pandas as pd
@@ -17,24 +17,15 @@ import streamlit as st
 # =========================
 
 st.set_page_config(
-    page_title="Moneyline Winners v1.0.2",
+    page_title="Moneyline Winners v1.1",
     page_icon="⚾",
     layout="wide",
 )
 
 MLB_BASE = "https://statsapi.mlb.com/api/v1"
-MODEL_PATH = Path("model_artifacts/mlb_logistic_model.joblib")
+OPEN_METEO_BASE = "https://api.open-meteo.com/v1/forecast"
 
-DEFAULT_FEATURES = [
-    "win_pct_diff",
-    "rpg_diff",
-    "rapg_diff",
-    "run_diff_per_game_diff",
-    "recent_win_pct_diff",
-    "recent_rpg_diff",
-    "recent_rapg_diff",
-    "home_field",
-]
+MODEL_PATH = Path("model_artifacts/mlb_candidate_v1_1_logistic_model.joblib")
 
 FINAL_STATES = {"Final", "Game Over", "Completed Early"}
 
@@ -45,6 +36,63 @@ PREGAME_STATES = {
     "Delayed Start",
     "Delayed",
     "Postponed",
+}
+
+DEFAULT_FEATURES = [
+    "win_pct_diff",
+    "rpg_diff",
+    "rapg_diff",
+    "run_diff_per_game_diff",
+    "recent_win_pct_diff",
+    "recent_rpg_diff",
+    "recent_rapg_diff",
+    "home_field",
+    "vs_hand_games_scaled_diff",
+    "env_temp",
+    "opp_adj_offense_diff",
+]
+
+CANDIDATE_ADDED_FEATURES = [
+    "vs_hand_games_scaled_diff",
+    "env_temp",
+    "opp_adj_offense_diff",
+]
+
+
+MANUAL_VENUE_COORDS = {
+    "yankee stadium": (40.8296, -73.9262),
+    "fenway park": (42.3467, -71.0972),
+    "oriole park at camden yards": (39.2840, -76.6217),
+    "rogers centre": (43.6414, -79.3894),
+    "comerica park": (42.3390, -83.0485),
+    "progressive field": (41.4962, -81.6852),
+    "target field": (44.9817, -93.2776),
+    "kauffman stadium": (39.0517, -94.4803),
+    "rate field": (41.8300, -87.6339),
+    "guaranteed rate field": (41.8300, -87.6339),
+    "pnc park": (40.4469, -80.0057),
+    "great american ball park": (39.0978, -84.5066),
+    "citi field": (40.7571, -73.8458),
+    "wrigley field": (41.9484, -87.6553),
+    "american family field": (43.0280, -87.9712),
+    "busch stadium": (38.6226, -90.1928),
+    "coors field": (39.7561, -104.9942),
+    "chase field": (33.4455, -112.0667),
+    "tropicana field": (27.7682, -82.6534),
+    "loandepot park": (25.7781, -80.2197),
+    "angel stadium": (33.8003, -117.8827),
+    "petco park": (32.7073, -117.1573),
+    "dodger stadium": (34.0739, -118.2400),
+    "oracle park": (37.7786, -122.3893),
+    "truist park": (33.8908, -84.4678),
+    "tmobile park": (47.5914, -122.3325),
+    "globe life field": (32.7473, -97.0842),
+    "minute maid park": (29.7573, -95.3555),
+    "daikin park": (29.7573, -95.3555),
+    "oakland coliseum": (37.7516, -122.2005),
+    "sutter health park": (38.5804, -121.5139),
+    "citizens bank park": (39.9061, -75.1665),
+    "nationals park": (38.8730, -77.0074),
 }
 
 
@@ -216,11 +264,6 @@ st.markdown(
             color: #8fd3ff;
         }
 
-        .muted {
-            color: #b8c7d9;
-            font-size: 13px;
-        }
-
         div[data-testid="stDataFrame"] {
             background-color: #0d1b2e;
         }
@@ -231,21 +274,67 @@ st.markdown(
 
 
 # =========================
-# Helpers
+# General Helpers
 # =========================
 
 def h(value):
     return html_lib.escape(str(value))
 
 
+def normalize_key(value):
+    value = str(value or "").lower().strip()
+    value = value.replace("&", "and")
+    value = re.sub(r"[^a-z0-9 ]", "", value)
+    value = re.sub(r"\s+", " ", value)
+    return value
+
+
 def normalize_team_name(name):
     if not name:
         return ""
+
     name = name.lower()
     name = name.replace("&", "and")
     name = re.sub(r"[^a-z0-9 ]", "", name)
     name = re.sub(r"\s+", " ", name).strip()
+
     return name
+
+
+def safe_int(x, default=0):
+    try:
+        if x is None or pd.isna(x):
+            return default
+        return int(x)
+    except Exception:
+        return default
+
+
+def safe_float(x, default=None):
+    try:
+        if x is None or pd.isna(x):
+            return default
+        return float(x)
+    except Exception:
+        return default
+
+
+def normalize_hand(value):
+    if value is None or pd.isna(value):
+        return "U"
+
+    value = str(value).upper().strip()
+
+    if value in {"L", "LEFT", "LEFTY"}:
+        return "L"
+
+    if value in {"R", "RIGHT", "RIGHTY"}:
+        return "R"
+
+    if value in {"S", "SWITCH"}:
+        return "S"
+
+    return "U"
 
 
 def american_to_implied_prob(moneyline):
@@ -305,11 +394,78 @@ def get_game_status(game):
     return game.get("status", {}).get("detailedState", "")
 
 
+def get_game_utc_datetime(game):
+    game_datetime = game.get("gameDate")
+
+    if not game_datetime:
+        return None
+
+    try:
+        return datetime.fromisoformat(game_datetime.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def get_game_time_et(game):
+    dt = get_game_utc_datetime(game)
+
+    if dt is None:
+        return "TBD"
+
+    et = dt.astimezone(ZoneInfo("America/New_York"))
+
+    try:
+        return et.strftime("%-I:%M %p")
+    except Exception:
+        return et.strftime("%I:%M %p").lstrip("0")
+
+
+def get_team_id(game, side):
+    return safe_int(
+        game.get("teams", {}).get(side, {}).get("team", {}).get("id")
+    )
+
+
+def get_team_name(game, side):
+    return (
+        game.get("teams", {})
+        .get(side, {})
+        .get("team", {})
+        .get("name", side.title())
+    )
+
+
+def get_team_abbr(game, side):
+    team = game.get("teams", {}).get(side, {}).get("team", {})
+    return team.get("abbreviation") or team.get("teamName") or team.get("name", side.title())
+
+
+def get_score(game, side):
+    return safe_int(game.get("teams", {}).get(side, {}).get("score"), default=None)
+
+
+def get_probable_pitcher_id(game, side):
+    pitcher = game.get("teams", {}).get(side, {}).get("probablePitcher")
+
+    if not pitcher:
+        return 0
+
+    return safe_int(pitcher.get("id"))
+
+
+def get_probable_pitcher_name(game, side):
+    pitcher = game.get("teams", {}).get(side, {}).get("probablePitcher")
+
+    if not pitcher:
+        return "TBD"
+
+    return pitcher.get("fullName", "TBD")
+
+
 def is_final_game(game):
     status = get_game_status(game)
-    teams = game.get("teams", {})
-    home_score = teams.get("home", {}).get("score")
-    away_score = teams.get("away", {}).get("score")
+    home_score = get_score(game, "home")
+    away_score = get_score(game, "away")
 
     return status in FINAL_STATES and home_score is not None and away_score is not None
 
@@ -317,25 +473,6 @@ def is_final_game(game):
 def is_pregame(game):
     status = get_game_status(game)
     return status in PREGAME_STATES or "Scheduled" in status or "Pre-Game" in status
-
-
-def get_game_time_et(game):
-    game_datetime = game.get("gameDate")
-
-    if not game_datetime:
-        return "TBD"
-
-    try:
-        dt = datetime.fromisoformat(game_datetime.replace("Z", "+00:00"))
-        et = dt.astimezone(ZoneInfo("America/New_York"))
-
-        try:
-            return et.strftime("%-I:%M %p")
-        except Exception:
-            return et.strftime("%I:%M %p").lstrip("0")
-
-    except Exception:
-        return "TBD"
 
 
 def grade_lineup_status(status):
@@ -374,40 +511,6 @@ def lineup_sort_value(status):
     return order.get(status, 0)
 
 
-def build_reasons(features, selected_side):
-    reasons = []
-
-    side_is_home = selected_side == "Home"
-
-    def favors_selected(value, home_positive=True):
-        if home_positive:
-            return value > 0 if side_is_home else value < 0
-        return value < 0 if side_is_home else value > 0
-
-    checks = [
-        ("Win rate edge", features.get("win_pct_diff", 0), 0.025, True),
-        ("Run differential edge", features.get("run_diff_per_game_diff", 0), 0.15, True),
-        ("Better scoring profile", features.get("rpg_diff", 0), 0.20, True),
-        ("Better run prevention", features.get("rapg_diff", 0), 0.20, True),
-        ("Recent form edge", features.get("recent_win_pct_diff", 0), 0.10, True),
-        ("Recent offense edge", features.get("recent_rpg_diff", 0), 0.30, True),
-
-        # recent_rapg_diff = home recent runs allowed - away recent runs allowed.
-        # Lower is better for home, higher is better for away.
-        ("Recent run prevention edge", features.get("recent_rapg_diff", 0), 0.30, False),
-    ]
-
-    for label, value, threshold, home_positive in checks:
-        if abs(value) >= threshold and favors_selected(value, home_positive=home_positive):
-            reasons.append(label)
-
-    if not reasons:
-        reasons.append("Narrow model edge")
-        reasons.append("No major single-driver advantage")
-
-    return reasons[:3]
-
-
 # =========================
 # Model Loading
 # =========================
@@ -416,8 +519,8 @@ def build_reasons(features, selected_side):
 def load_model_artifact():
     if not MODEL_PATH.exists():
         st.error(
-            f"Model file not found at: {MODEL_PATH}\n\n"
-            "Make sure mlb_logistic_model.joblib is inside model_artifacts/"
+            f"Candidate v1.1 model file not found at: {MODEL_PATH}\n\n"
+            "Make sure mlb_candidate_v1_1_logistic_model.joblib is inside model_artifacts/"
         )
         st.stop()
 
@@ -431,6 +534,8 @@ def load_model_artifact():
             or artifact.get("selected_features")
         )
 
+        model_version = artifact.get("model_version", "candidate_v1_1")
+
         if model is None:
             st.error("Loaded model artifact is a dictionary, but no model was found inside it.")
             st.stop()
@@ -438,12 +543,12 @@ def load_model_artifact():
         if features is None:
             features = infer_model_features(model)
 
-        return model, list(features)
+        return model, list(features), model_version, artifact
 
     model = artifact
     features = infer_model_features(model)
 
-    return model, features
+    return model, features, "candidate_v1_1", {}
 
 
 def infer_model_features(model):
@@ -459,27 +564,23 @@ def infer_model_features(model):
 
 
 # =========================
-# MLB Data
+# MLB API
 # =========================
 
 @st.cache_data(ttl=60 * 30)
 def fetch_schedule_range(start_day, end_day):
+    if pd.to_datetime(start_day).date() > pd.to_datetime(end_day).date():
+        return {"dates": []}
+
     params = {
         "sportId": 1,
-        "startDate": start_day,
-        "endDate": end_day,
+        "startDate": str(start_day),
+        "endDate": str(end_day),
         "gameTypes": "R",
-        "hydrate": "team,linescore,probablePitcher",
+        "hydrate": "team,venue,linescore,probablePitcher",
     }
 
-    r = requests.get(f"{MLB_BASE}/schedule", params=params, timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-
-@st.cache_data(ttl=60 * 5)
-def fetch_boxscore(game_pk):
-    r = requests.get(f"{MLB_BASE}/game/{game_pk}/boxscore", timeout=20)
+    r = requests.get(f"{MLB_BASE}/schedule", params=params, timeout=60)
     r.raise_for_status()
     return r.json()
 
@@ -496,153 +597,67 @@ def flatten_games(schedule_json):
     return games
 
 
-def create_team_state():
-    return {
-        "games": 0,
-        "wins": 0,
-        "runs_for": 0,
-        "runs_against": 0,
-        "recent": deque(maxlen=10),
-    }
+@st.cache_data(ttl=60 * 60)
+def fetch_people(player_ids_tuple):
+    player_ids = sorted(set(safe_int(pid) for pid in player_ids_tuple if safe_int(pid) > 0))
 
+    if not player_ids:
+        return {}
 
-def update_team_state(state, runs_for, runs_against):
-    win = 1 if runs_for > runs_against else 0
+    people = {}
+    batch_size = 100
 
-    state["games"] += 1
-    state["wins"] += win
-    state["runs_for"] += runs_for
-    state["runs_against"] += runs_against
+    for i in range(0, len(player_ids), batch_size):
+        batch = player_ids[i:i + batch_size]
 
-    state["recent"].append(
-        {
-            "win": win,
-            "runs_for": runs_for,
-            "runs_against": runs_against,
-        }
-    )
-
-
-def snapshot_team_state(state):
-    games = state["games"]
-
-    if games <= 0:
-        return {
-            "win_pct": 0.500,
-            "rpg": 4.50,
-            "rapg": 4.50,
-            "run_diff_per_game": 0.00,
-            "recent_win_pct": 0.500,
-            "recent_rpg": 4.50,
-            "recent_rapg": 4.50,
+        params = {
+            "personIds": ",".join(str(pid) for pid in batch),
         }
 
-    win_pct = state["wins"] / games
-    rpg = state["runs_for"] / games
-    rapg = state["runs_against"] / games
-    run_diff_per_game = rpg - rapg
+        r = requests.get(f"{MLB_BASE}/people", params=params, timeout=30)
+        r.raise_for_status()
+        data = r.json()
 
-    recent = list(state["recent"])
+        for person in data.get("people", []):
+            player_id = safe_int(person.get("id"))
 
-    if len(recent) == 0:
-        recent_win_pct = win_pct
-        recent_rpg = rpg
-        recent_rapg = rapg
-    else:
-        recent_win_pct = sum(g["win"] for g in recent) / len(recent)
-        recent_rpg = sum(g["runs_for"] for g in recent) / len(recent)
-        recent_rapg = sum(g["runs_against"] for g in recent) / len(recent)
+            people[player_id] = {
+                "full_name": person.get("fullName"),
+                "pitch_hand": normalize_hand(person.get("pitchHand", {}).get("code")),
+                "bat_side": normalize_hand(person.get("batSide", {}).get("code")),
+            }
 
-    return {
-        "win_pct": win_pct,
-        "rpg": rpg,
-        "rapg": rapg,
-        "run_diff_per_game": run_diff_per_game,
-        "recent_win_pct": recent_win_pct,
-        "recent_rpg": recent_rpg,
-        "recent_rapg": recent_rapg,
-    }
+    return people
 
 
-def build_team_states(history_games):
-    team_states = defaultdict(create_team_state)
-
-    final_games = [g for g in history_games if is_final_game(g)]
-
-    final_games = sorted(
-        final_games,
-        key=lambda g: (
-            g.get("officialDate", ""),
-            g.get("gamePk", 0),
-        ),
-    )
-
-    for game in final_games:
-        teams = game.get("teams", {})
-
-        home = teams.get("home", {})
-        away = teams.get("away", {})
-
-        home_team = home.get("team", {})
-        away_team = away.get("team", {})
-
-        home_id = home_team.get("id")
-        away_id = away_team.get("id")
-
-        home_score = int(home.get("score", 0))
-        away_score = int(away.get("score", 0))
-
-        update_team_state(team_states[home_id], home_score, away_score)
-        update_team_state(team_states[away_id], away_score, home_score)
-
-    return team_states
+@st.cache_data(ttl=60 * 5)
+def fetch_boxscore(game_pk):
+    r = requests.get(f"{MLB_BASE}/game/{game_pk}/boxscore", timeout=20)
+    r.raise_for_status()
+    return r.json()
 
 
-def build_features_for_game(game, team_states):
-    teams = game.get("teams", {})
+@st.cache_data(ttl=60 * 15)
+def fetch_game_feed(game_pk):
+    urls = [
+        f"https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live",
+        f"https://statsapi.mlb.com/api/v1/game/{game_pk}/feed/live",
+    ]
 
-    home = teams.get("home", {})
-    away = teams.get("away", {})
+    for url in urls:
+        try:
+            r = requests.get(url, timeout=30)
+            r.raise_for_status()
+            return r.json()
+        except Exception:
+            continue
 
-    home_team = home.get("team", {})
-    away_team = away.get("team", {})
-
-    home_id = home_team.get("id")
-    away_id = away_team.get("id")
-
-    home_snapshot = snapshot_team_state(team_states[home_id])
-    away_snapshot = snapshot_team_state(team_states[away_id])
-
-    features = {
-        "win_pct_diff": home_snapshot["win_pct"] - away_snapshot["win_pct"],
-        "rpg_diff": home_snapshot["rpg"] - away_snapshot["rpg"],
-        "rapg_diff": away_snapshot["rapg"] - home_snapshot["rapg"],
-        "run_diff_per_game_diff": (
-            home_snapshot["run_diff_per_game"] - away_snapshot["run_diff_per_game"]
-        ),
-        "recent_win_pct_diff": (
-            home_snapshot["recent_win_pct"] - away_snapshot["recent_win_pct"]
-        ),
-        "recent_rpg_diff": home_snapshot["recent_rpg"] - away_snapshot["recent_rpg"],
-        "recent_rapg_diff": (
-            home_snapshot["recent_rapg"] - away_snapshot["recent_rapg"]
-        ),
-        "home_field": 1.0,
-    }
-
-    return features
+    return None
 
 
-def get_probable_pitcher(game, side):
-    try:
-        pitcher = game.get("teams", {}).get(side, {}).get("probablePitcher")
-        if pitcher:
-            return pitcher.get("fullName", "TBD")
-    except Exception:
-        pass
-
-    return "TBD"
-
+# =========================
+# Lineup Status
+# =========================
 
 def count_lineup_starters_from_boxscore(boxscore, side):
     team_data = boxscore.get("teams", {}).get(side, {})
@@ -691,6 +706,612 @@ def get_lineup_status(game_pk):
 
 
 # =========================
+# Team State Features
+# =========================
+
+def create_team_state():
+    return {
+        "games": 0,
+        "wins": 0,
+        "runs_for": 0,
+        "runs_against": 0,
+        "recent": deque(maxlen=10),
+        "opponents": [],
+        "recent_opponents": deque(maxlen=10),
+    }
+
+
+def update_team_state(state, runs_for, runs_against, opponent_id):
+    runs_for = safe_int(runs_for)
+    runs_against = safe_int(runs_against)
+
+    win = 1 if runs_for > runs_against else 0
+
+    state["games"] += 1
+    state["wins"] += win
+    state["runs_for"] += runs_for
+    state["runs_against"] += runs_against
+
+    state["recent"].append(
+        {
+            "win": win,
+            "runs_for": runs_for,
+            "runs_against": runs_against,
+            "run_diff": runs_for - runs_against,
+        }
+    )
+
+    state["opponents"].append(opponent_id)
+    state["recent_opponents"].append(opponent_id)
+
+
+def snapshot_team_state(state):
+    games = state["games"]
+
+    if games <= 0:
+        return {
+            "win_pct": 0.500,
+            "rpg": 4.50,
+            "rapg": 4.50,
+            "run_diff_per_game": 0.00,
+            "run_diff_pg": 0.00,
+            "recent_win_pct": 0.500,
+            "recent_rpg": 4.50,
+            "recent_rapg": 4.50,
+            "recent_run_diff_pg": 0.00,
+            "games_scaled": 0.00,
+        }
+
+    win_pct = state["wins"] / games
+    rpg = state["runs_for"] / games
+    rapg = state["runs_against"] / games
+    run_diff_pg = rpg - rapg
+
+    recent = list(state["recent"])
+
+    if recent:
+        recent_win_pct = sum(g["win"] for g in recent) / len(recent)
+        recent_rpg = sum(g["runs_for"] for g in recent) / len(recent)
+        recent_rapg = sum(g["runs_against"] for g in recent) / len(recent)
+        recent_run_diff_pg = sum(g["run_diff"] for g in recent) / len(recent)
+    else:
+        recent_win_pct = win_pct
+        recent_rpg = rpg
+        recent_rapg = rapg
+        recent_run_diff_pg = run_diff_pg
+
+    return {
+        "win_pct": win_pct,
+        "rpg": rpg,
+        "rapg": rapg,
+        "run_diff_per_game": run_diff_pg,
+        "run_diff_pg": run_diff_pg,
+        "recent_win_pct": recent_win_pct,
+        "recent_rpg": recent_rpg,
+        "recent_rapg": recent_rapg,
+        "recent_run_diff_pg": recent_run_diff_pg,
+        "games_scaled": min(games / 50.0, 1.0),
+    }
+
+
+def build_team_states_from_history(history_games):
+    team_states = defaultdict(create_team_state)
+
+    final_games = [g for g in history_games if is_final_game(g)]
+
+    final_games = sorted(
+        final_games,
+        key=lambda g: (
+            g.get("officialDate", ""),
+            g.get("gamePk", 0),
+        ),
+    )
+
+    for game in final_games:
+        home_team_id = get_team_id(game, "home")
+        away_team_id = get_team_id(game, "away")
+
+        home_score = get_score(game, "home")
+        away_score = get_score(game, "away")
+
+        if home_score is None or away_score is None:
+            continue
+
+        update_team_state(
+            team_states[home_team_id],
+            home_score,
+            away_score,
+            opponent_id=away_team_id,
+        )
+
+        update_team_state(
+            team_states[away_team_id],
+            away_score,
+            home_score,
+            opponent_id=home_team_id,
+        )
+
+    return team_states
+
+
+def schedule_strength_snapshot(team_states, opponent_ids):
+    opponent_ids = list(opponent_ids)
+
+    if not opponent_ids:
+        return {
+            "opp_win_pct": 0.500,
+            "opp_rpg": 4.50,
+            "opp_rapg": 4.50,
+            "opp_run_diff_pg": 0.00,
+            "opponents_faced_scaled": 0.00,
+        }
+
+    snaps = [snapshot_team_state(team_states[opp_id]) for opp_id in opponent_ids]
+
+    return {
+        "opp_win_pct": sum(s["win_pct"] for s in snaps) / len(snaps),
+        "opp_rpg": sum(s["rpg"] for s in snaps) / len(snaps),
+        "opp_rapg": sum(s["rapg"] for s in snaps) / len(snaps),
+        "opp_run_diff_pg": sum(s["run_diff_pg"] for s in snaps) / len(snaps),
+        "opponents_faced_scaled": min(len(opponent_ids) / 50.0, 1.0),
+    }
+
+
+def compute_opp_adj_offense_diff(team_states, home_team_id, away_team_id):
+    home = snapshot_team_state(team_states[home_team_id])
+    away = snapshot_team_state(team_states[away_team_id])
+
+    home_sos = schedule_strength_snapshot(
+        team_states,
+        team_states[home_team_id]["opponents"],
+    )
+
+    away_sos = schedule_strength_snapshot(
+        team_states,
+        team_states[away_team_id]["opponents"],
+    )
+
+    home_adj_offense = home["rpg"] - home_sos["opp_rapg"]
+    away_adj_offense = away["rpg"] - away_sos["opp_rapg"]
+
+    return home_adj_offense - away_adj_offense
+
+
+def build_base_team_features_for_game(game, team_states):
+    home_team_id = get_team_id(game, "home")
+    away_team_id = get_team_id(game, "away")
+
+    home_snapshot = snapshot_team_state(team_states[home_team_id])
+    away_snapshot = snapshot_team_state(team_states[away_team_id])
+
+    return {
+        "win_pct_diff": home_snapshot["win_pct"] - away_snapshot["win_pct"],
+        "rpg_diff": home_snapshot["rpg"] - away_snapshot["rpg"],
+        "rapg_diff": away_snapshot["rapg"] - home_snapshot["rapg"],
+        "run_diff_per_game_diff": (
+            home_snapshot["run_diff_per_game"] - away_snapshot["run_diff_per_game"]
+        ),
+        "recent_win_pct_diff": (
+            home_snapshot["recent_win_pct"] - away_snapshot["recent_win_pct"]
+        ),
+        "recent_rpg_diff": home_snapshot["recent_rpg"] - away_snapshot["recent_rpg"],
+        "recent_rapg_diff": (
+            away_snapshot["recent_rapg"] - home_snapshot["recent_rapg"]
+        ),
+        "home_field": 1.0,
+    }
+
+
+# =========================
+# Team vs Starter Hand Feature
+# =========================
+
+def create_hand_state():
+    return {
+        "games": 0,
+        "wins": 0,
+        "runs_for": 0,
+        "runs_against": 0,
+        "recent": deque(maxlen=10),
+    }
+
+
+def create_team_hand_state():
+    return {
+        "L": create_hand_state(),
+        "R": create_hand_state(),
+    }
+
+
+def update_hand_state(state, runs_for, runs_against):
+    runs_for = safe_int(runs_for)
+    runs_against = safe_int(runs_against)
+
+    win = 1 if runs_for > runs_against else 0
+
+    state["games"] += 1
+    state["wins"] += win
+    state["runs_for"] += runs_for
+    state["runs_against"] += runs_against
+
+    state["recent"].append(
+        {
+            "win": win,
+            "runs_for": runs_for,
+            "runs_against": runs_against,
+            "run_diff": runs_for - runs_against,
+        }
+    )
+
+
+def snapshot_hand_state(state):
+    games = state["games"]
+
+    return {
+        "games": games,
+        "games_scaled": min(games / 50.0, 1.0) if games > 0 else 0.0,
+    }
+
+
+def build_team_hand_states_from_history(history_games, pitcher_hands):
+    team_hand_states = defaultdict(create_team_hand_state)
+
+    final_games = [g for g in history_games if is_final_game(g)]
+
+    final_games = sorted(
+        final_games,
+        key=lambda g: (
+            g.get("officialDate", ""),
+            g.get("gamePk", 0),
+        ),
+    )
+
+    for game in final_games:
+        home_team_id = get_team_id(game, "home")
+        away_team_id = get_team_id(game, "away")
+
+        home_score = get_score(game, "home")
+        away_score = get_score(game, "away")
+
+        if home_score is None or away_score is None:
+            continue
+
+        home_starter_id = get_probable_pitcher_id(game, "home")
+        away_starter_id = get_probable_pitcher_id(game, "away")
+
+        home_starter_hand = pitcher_hands.get(home_starter_id, "U")
+        away_starter_hand = pitcher_hands.get(away_starter_id, "U")
+
+        # Home offense faced away starter hand.
+        if away_starter_hand in {"L", "R"}:
+            update_hand_state(
+                team_hand_states[home_team_id][away_starter_hand],
+                home_score,
+                away_score,
+            )
+
+        # Away offense faced home starter hand.
+        if home_starter_hand in {"L", "R"}:
+            update_hand_state(
+                team_hand_states[away_team_id][home_starter_hand],
+                away_score,
+                home_score,
+            )
+
+    return team_hand_states
+
+
+def compute_vs_hand_games_scaled_diff(
+    team_hand_states,
+    home_team_id,
+    away_team_id,
+    home_starter_hand,
+    away_starter_hand,
+):
+    home_starter_hand = normalize_hand(home_starter_hand)
+    away_starter_hand = normalize_hand(away_starter_hand)
+
+    if away_starter_hand in {"L", "R"}:
+        home_state = team_hand_states[home_team_id][away_starter_hand]
+    else:
+        home_state = create_hand_state()
+
+    if home_starter_hand in {"L", "R"}:
+        away_state = team_hand_states[away_team_id][home_starter_hand]
+    else:
+        away_state = create_hand_state()
+
+    home_snapshot = snapshot_hand_state(home_state)
+    away_snapshot = snapshot_hand_state(away_state)
+
+    return {
+        "home_vs_hand_games_scaled": home_snapshot["games_scaled"],
+        "away_vs_hand_games_scaled": away_snapshot["games_scaled"],
+        "vs_hand_games_scaled_diff": (
+            home_snapshot["games_scaled"] - away_snapshot["games_scaled"]
+        ),
+        "home_vs_hand_games": home_snapshot["games"],
+        "away_vs_hand_games": away_snapshot["games"],
+    }
+
+
+# =========================
+# Weather / env_temp
+# =========================
+
+def get_venue_id(game):
+    return safe_int(game.get("venue", {}).get("id"))
+
+
+def get_venue_name(game):
+    return game.get("venue", {}).get("name", "Unknown Venue")
+
+
+def extract_coords_from_venue_obj(venue):
+    possible_locations = [
+        venue.get("location", {}) if isinstance(venue, dict) else {},
+        venue.get("venues", [{}])[0].get("location", {}) if isinstance(venue, dict) and venue.get("venues") else {},
+    ]
+
+    for loc in possible_locations:
+        if not isinstance(loc, dict):
+            continue
+
+        possible_coord_objs = [
+            loc.get("defaultCoordinates", {}),
+            loc.get("coordinates", {}),
+            loc,
+        ]
+
+        for coord_obj in possible_coord_objs:
+            if not isinstance(coord_obj, dict):
+                continue
+
+            lat = coord_obj.get("latitude") or coord_obj.get("lat") or coord_obj.get("y")
+            lon = coord_obj.get("longitude") or coord_obj.get("lng") or coord_obj.get("lon") or coord_obj.get("x")
+
+            lat = safe_float(lat)
+            lon = safe_float(lon)
+
+            if lat is not None and lon is not None:
+                if -90 <= lat <= 90 and -180 <= lon <= 180:
+                    return lat, lon, "mlb_venue_coordinates"
+
+    return None, None, None
+
+
+@st.cache_data(ttl=60 * 60 * 24)
+def fetch_venue_details(venue_id):
+    if not venue_id:
+        return None
+
+    urls = [
+        f"{MLB_BASE}/venues/{venue_id}",
+        f"{MLB_BASE}/venues?venueIds={venue_id}",
+    ]
+
+    for url in urls:
+        try:
+            r = requests.get(url, timeout=30)
+            r.raise_for_status()
+            return r.json()
+        except Exception:
+            continue
+
+    return None
+
+
+def get_venue_coordinates(game):
+    venue = game.get("venue", {})
+    venue_name = get_venue_name(game)
+    venue_id = get_venue_id(game)
+
+    lat, lon, source = extract_coords_from_venue_obj(venue)
+
+    if lat is not None and lon is not None:
+        return lat, lon, source
+
+    details = fetch_venue_details(venue_id)
+
+    if details:
+        lat, lon, source = extract_coords_from_venue_obj(details)
+
+        if lat is not None and lon is not None:
+            return lat, lon, source
+
+    manual = MANUAL_VENUE_COORDS.get(normalize_key(venue_name))
+
+    if manual:
+        return manual[0], manual[1], "manual_venue_coordinates"
+
+    return None, None, "missing_coordinates"
+
+
+def parse_temp_from_value(value):
+    if value is None:
+        return None
+
+    if isinstance(value, (int, float)):
+        temp = float(value)
+
+        if -20 <= temp <= 130:
+            return temp
+
+        return None
+
+    text = str(value)
+
+    match = re.search(r"(-?\d{1,3})\s*(?:degrees|degree|deg|°)", text, re.I)
+
+    if match:
+        temp = float(match.group(1))
+
+        if -20 <= temp <= 130:
+            return temp
+
+    return None
+
+
+def extract_temperature_from_mlb_feed(feed):
+    if not feed:
+        return None, "mlb_feed_missing"
+
+    weather = feed.get("gameData", {}).get("weather", {})
+
+    for key in ["temp", "temperature"]:
+        temp = parse_temp_from_value(weather.get(key))
+
+        if temp is not None:
+            return temp, "mlb_game_feed_weather"
+
+    for value in weather.values():
+        temp = parse_temp_from_value(value)
+
+        if temp is not None:
+            return temp, "mlb_game_feed_weather_text"
+
+    info_items = (
+        feed.get("liveData", {})
+        .get("boxscore", {})
+        .get("info", [])
+    )
+
+    for item in info_items:
+        label = str(item.get("label", "")).lower()
+        value = item.get("value", "")
+
+        if "weather" in label:
+            temp = parse_temp_from_value(value)
+
+            if temp is not None:
+                return temp, "mlb_boxscore_weather"
+
+    return None, "mlb_temp_unavailable"
+
+
+@st.cache_data(ttl=60 * 30)
+def fetch_open_meteo_hourly_temp(lat, lon, game_utc_iso):
+    game_utc_dt = datetime.fromisoformat(game_utc_iso)
+
+    target_et_date = game_utc_dt.astimezone(ZoneInfo("America/New_York")).date()
+
+    start_date = target_et_date - timedelta(days=1)
+    end_date = target_et_date + timedelta(days=1)
+
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": "temperature_2m",
+        "temperature_unit": "fahrenheit",
+        "timezone": "auto",
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+    }
+
+    r = requests.get(OPEN_METEO_BASE, params=params, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+
+    hourly = data.get("hourly", {})
+    times = hourly.get("time", [])
+    temps = hourly.get("temperature_2m", [])
+
+    if not times or not temps:
+        return None, None, None, "open_meteo_missing_hourly"
+
+    utc_offset_seconds = safe_int(data.get("utc_offset_seconds"), default=0)
+    game_local_naive = (game_utc_dt + timedelta(seconds=utc_offset_seconds)).replace(tzinfo=None)
+
+    best = None
+
+    for t, temp in zip(times, temps):
+        if temp is None:
+            continue
+
+        try:
+            forecast_dt = datetime.fromisoformat(str(t))
+        except Exception:
+            continue
+
+        diff_minutes = abs((forecast_dt - game_local_naive).total_seconds()) / 60.0
+
+        if best is None or diff_minutes < best["diff_minutes"]:
+            best = {
+                "temp": float(temp),
+                "forecast_hour": str(t),
+                "diff_minutes": diff_minutes,
+            }
+
+    if best is None:
+        return None, None, None, "open_meteo_no_matching_temp"
+
+    return (
+        best["temp"],
+        best["forecast_hour"],
+        best["diff_minutes"],
+        "open_meteo_forecast",
+    )
+
+
+def get_env_temp_for_game(game):
+    game_pk = safe_int(game.get("gamePk"))
+    game_utc_dt = get_game_utc_datetime(game)
+
+    feed = fetch_game_feed(game_pk)
+    mlb_temp, mlb_source = extract_temperature_from_mlb_feed(feed)
+
+    if mlb_temp is not None:
+        return {
+            "env_temp": mlb_temp,
+            "env_temp_source": mlb_source,
+            "forecast_hour": "",
+            "forecast_hour_diff_minutes": "",
+        }
+
+    lat, lon, coord_source = get_venue_coordinates(game)
+
+    if lat is None or lon is None or game_utc_dt is None:
+        return {
+            "env_temp": 74.0,
+            "env_temp_source": "default_missing_coordinates_or_time",
+            "forecast_hour": "",
+            "forecast_hour_diff_minutes": "",
+        }
+
+    try:
+        forecast_temp, forecast_hour, diff_minutes, forecast_source = (
+            fetch_open_meteo_hourly_temp(
+                float(lat),
+                float(lon),
+                game_utc_dt.isoformat(),
+            )
+        )
+
+        if forecast_temp is not None:
+            return {
+                "env_temp": forecast_temp,
+                "env_temp_source": forecast_source,
+                "forecast_hour": forecast_hour,
+                "forecast_hour_diff_minutes": round(diff_minutes, 1),
+            }
+
+        return {
+            "env_temp": 74.0,
+            "env_temp_source": f"default_after_{forecast_source}",
+            "forecast_hour": "",
+            "forecast_hour_diff_minutes": "",
+        }
+
+    except Exception as e:
+        return {
+            "env_temp": 74.0,
+            "env_temp_source": f"default_after_open_meteo_error:{type(e).__name__}",
+            "forecast_hour": "",
+            "forecast_hour_diff_minutes": "",
+        }
+
+
+# =========================
 # Odds
 # =========================
 
@@ -736,6 +1357,42 @@ def fetch_moneyline_odds(api_key):
 
 
 # =========================
+# Reasons
+# =========================
+
+def build_reasons(features, selected_side):
+    reasons = []
+
+    side_is_home = selected_side == "Home"
+
+    def favors_selected(value, home_positive=True):
+        if home_positive:
+            return value > 0 if side_is_home else value < 0
+        return value < 0 if side_is_home else value > 0
+
+    checks = [
+        ("Win rate edge", features.get("win_pct_diff", 0), 0.025, True),
+        ("Run differential edge", features.get("run_diff_per_game_diff", 0), 0.15, True),
+        ("Better scoring profile", features.get("rpg_diff", 0), 0.20, True),
+        ("Better run prevention", features.get("rapg_diff", 0), 0.20, True),
+        ("Recent form edge", features.get("recent_win_pct_diff", 0), 0.10, True),
+        ("Recent offense edge", features.get("recent_rpg_diff", 0), 0.30, True),
+        ("Recent run prevention edge", features.get("recent_rapg_diff", 0), 0.30, True),
+        ("Opponent-adjusted offense edge", features.get("opp_adj_offense_diff", 0), 0.25, True),
+    ]
+
+    for label, value, threshold, home_positive in checks:
+        if abs(value) >= threshold and favors_selected(value, home_positive=home_positive):
+            reasons.append(label)
+
+    if not reasons:
+        reasons.append("Narrow model edge")
+        reasons.append("No major single-driver advantage")
+
+    return reasons[:3]
+
+
+# =========================
 # Card Rendering
 # =========================
 
@@ -776,6 +1433,7 @@ def render_game_card(row, show_market_data=False):
         box_4_value = model_tier
 
     reasons = row.get("reasons", [])
+
     if not isinstance(reasons, list):
         reasons = []
 
@@ -842,13 +1500,13 @@ def render_card_grid(df, columns=3, show_market_data=False):
 
 last_updated_et = datetime.now(ZoneInfo("America/New_York")).strftime("%I:%M %p ET")
 
-st.title("⚾ Moneyline Winners v1.0.2")
+st.title("⚾ Moneyline Winners v1.1")
 st.caption(
-    f"Production Model v1 — validated team-only logistic model. "
+    f"Production Model v1.1 — team strength + weather + opponent-adjusted offense + hand-matchup sample. "
     f"Last updated: {last_updated_et}."
 )
 
-model, model_features = load_model_artifact()
+model, model_features, model_version, model_artifact = load_model_artifact()
 
 today_et = datetime.now(ZoneInfo("America/New_York")).date()
 
@@ -895,18 +1553,17 @@ with st.sidebar:
     st.divider()
 
     st.write("### Model")
+    st.write(f"Version: `{model_version}`")
     st.write("Production Feature Set:")
     st.code(", ".join(model_features), language="text")
 
+    st.write("### v1.1 Added Features")
+    st.write("- `env_temp`")
+    st.write("- `opp_adj_offense_diff`")
+    st.write("- `vs_hand_games_scaled_diff`")
+
     st.write("### Last Updated")
     st.write(last_updated_et)
-
-    st.write("### Notes")
-    st.write(
-        "v1.0.2 changes the product interface only. "
-        "The prediction model remains Production v1 team-only. "
-        "Model winner selection is based on win probability, not odds."
-    )
 
 
 selected_date = pd.to_datetime(selected_date).date()
@@ -934,15 +1591,6 @@ except Exception as e:
     st.stop()
 
 
-team_states = build_team_states(history_games)
-
-try:
-    odds_by_team = fetch_moneyline_odds(odds_api_key) if show_market_data else {}
-except Exception as e:
-    odds_by_team = {}
-    st.warning(f"Odds download failed. Showing model-only board. Error: {e}")
-
-
 if not today_games:
     st.warning("No regular-season MLB games found for the selected date.")
     st.stop()
@@ -966,24 +1614,82 @@ if not visible_games:
     st.stop()
 
 
+all_pitcher_ids = []
+
+for game in history_games + visible_games:
+    all_pitcher_ids.append(get_probable_pitcher_id(game, "home"))
+    all_pitcher_ids.append(get_probable_pitcher_id(game, "away"))
+
+try:
+    people = fetch_people(tuple(sorted(set(all_pitcher_ids))))
+except Exception as e:
+    st.warning(f"Pitcher handedness download failed. Hand feature will use neutral defaults. Error: {e}")
+    people = {}
+
+pitcher_hands = {
+    pid: info.get("pitch_hand", "U")
+    for pid, info in people.items()
+}
+
+team_states = build_team_states_from_history(history_games)
+team_hand_states = build_team_hand_states_from_history(history_games, pitcher_hands)
+
+try:
+    odds_by_team = fetch_moneyline_odds(odds_api_key) if show_market_data else {}
+except Exception as e:
+    odds_by_team = {}
+    st.warning(f"Odds download failed. Showing model-only board. Error: {e}")
+
+
 game_rows = []
 all_side_rows = []
 
+weather_sources = []
+
 for game in visible_games:
-    teams = game.get("teams", {})
+    home_team_id = get_team_id(game, "home")
+    away_team_id = get_team_id(game, "away")
 
-    home_team = teams.get("home", {}).get("team", {})
-    away_team = teams.get("away", {}).get("team", {})
+    home_name = get_team_name(game, "home")
+    away_name = get_team_name(game, "away")
 
-    home_name = home_team.get("name", "Home")
-    away_name = away_team.get("name", "Away")
-
-    home_abbr = home_team.get("abbreviation") or home_team.get("teamName") or home_name
-    away_abbr = away_team.get("abbreviation") or away_team.get("teamName") or away_name
+    home_abbr = get_team_abbr(game, "home")
+    away_abbr = get_team_abbr(game, "away")
 
     game_label = f"{away_abbr} @ {home_abbr}"
 
-    features = build_features_for_game(game, team_states)
+    home_starter_id = get_probable_pitcher_id(game, "home")
+    away_starter_id = get_probable_pitcher_id(game, "away")
+
+    home_starter_hand = pitcher_hands.get(home_starter_id, "U")
+    away_starter_hand = pitcher_hands.get(away_starter_id, "U")
+
+    features = build_base_team_features_for_game(game, team_states)
+
+    env = get_env_temp_for_game(game)
+    env_temp = env["env_temp"]
+    env_temp_source = env["env_temp_source"]
+    weather_sources.append(env_temp_source)
+
+    hand_features = compute_vs_hand_games_scaled_diff(
+        team_hand_states=team_hand_states,
+        home_team_id=home_team_id,
+        away_team_id=away_team_id,
+        home_starter_hand=home_starter_hand,
+        away_starter_hand=away_starter_hand,
+    )
+
+    features.update(
+        {
+            "env_temp": env_temp,
+            "opp_adj_offense_diff": compute_opp_adj_offense_diff(
+                team_states,
+                home_team_id,
+                away_team_id,
+            ),
+            **hand_features,
+        }
+    )
 
     X = pd.DataFrame([features])
 
@@ -1032,13 +1738,21 @@ for game in visible_games:
             "market_ml": home_market_ml,
             "market_prob": home_market_prob,
             "edge": home_edge,
-            "probable_pitcher": get_probable_pitcher(game, "home"),
+            "probable_pitcher": get_probable_pitcher_name(game, "home"),
             "status": game_status,
             "game_time_et": game_time_et,
             "lineup_status": lineup_status,
             "is_pregame": is_pregame(game),
             "model_tier": grade_model_tier(home_prob),
             "reasons": home_reasons,
+            "env_temp": env_temp,
+            "env_temp_source": env_temp_source,
+            "opp_adj_offense_diff": features["opp_adj_offense_diff"],
+            "vs_hand_games_scaled_diff": features["vs_hand_games_scaled_diff"],
+            "home_vs_hand_games": features["home_vs_hand_games"],
+            "away_vs_hand_games": features["away_vs_hand_games"],
+            "home_starter_hand": home_starter_hand,
+            "away_starter_hand": away_starter_hand,
         },
         {
             "game": game_label,
@@ -1051,13 +1765,21 @@ for game in visible_games:
             "market_ml": away_market_ml,
             "market_prob": away_market_prob,
             "edge": away_edge,
-            "probable_pitcher": get_probable_pitcher(game, "away"),
+            "probable_pitcher": get_probable_pitcher_name(game, "away"),
             "status": game_status,
             "game_time_et": game_time_et,
             "lineup_status": lineup_status,
             "is_pregame": is_pregame(game),
             "model_tier": grade_model_tier(away_prob),
             "reasons": away_reasons,
+            "env_temp": env_temp,
+            "env_temp_source": env_temp_source,
+            "opp_adj_offense_diff": features["opp_adj_offense_diff"],
+            "vs_hand_games_scaled_diff": features["vs_hand_games_scaled_diff"],
+            "home_vs_hand_games": features["home_vs_hand_games"],
+            "away_vs_hand_games": features["away_vs_hand_games"],
+            "home_starter_hand": home_starter_hand,
+            "away_starter_hand": away_starter_hand,
         },
     ]
 
@@ -1102,6 +1824,10 @@ available_games = len(visible_games)
 confirmed_lineups = int((board["lineup_status"] == "Confirmed").sum())
 high_confidence = int((board["model_prob"] >= 0.56).sum())
 top_model_prob = float(board["model_prob"].max())
+
+real_weather_count = int(
+    ~board["env_temp_source"].astype(str).str.contains("default", case=False, na=False).sum()
+)
 
 c1, c2, c3, c4, c5 = st.columns(5)
 
@@ -1162,11 +1888,14 @@ with c5:
 
 
 # =========================
-# Card Sections
+# Board
 # =========================
 
 st.subheader("Best Available Winners")
-st.caption("Pregame games only. Sorted by model win probability. Odds do not drive the prediction.")
+st.caption(
+    "Pregame games only. Sorted by model win probability. "
+    "Odds do not drive the prediction."
+)
 render_card_grid(best_available, columns=3, show_market_data=show_market_data)
 
 st.divider()
@@ -1178,6 +1907,53 @@ render_card_grid(pregame_board, columns=3, show_market_data=show_market_data)
 # =========================
 # Optional Tables
 # =========================
+
+with st.expander("Show v1.1 feature diagnostics"):
+    diagnostics = board.copy()
+
+    diagnostics["Model Prob"] = diagnostics["model_prob"].apply(format_percent)
+    diagnostics["Env Temp"] = diagnostics["env_temp"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "—")
+    diagnostics["Opp Adj Offense Diff"] = diagnostics["opp_adj_offense_diff"].apply(lambda x: f"{x:.3f}" if pd.notna(x) else "—")
+    diagnostics["Hand Sample Diff"] = diagnostics["vs_hand_games_scaled_diff"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "—")
+
+    diagnostics = diagnostics[
+        [
+            "game",
+            "team",
+            "Model Prob",
+            "Env Temp",
+            "env_temp_source",
+            "Opp Adj Offense Diff",
+            "Hand Sample Diff",
+            "home_vs_hand_games",
+            "away_vs_hand_games",
+            "home_starter_hand",
+            "away_starter_hand",
+            "lineup_status",
+            "status",
+            "game_time_et",
+        ]
+    ].rename(
+        columns={
+            "game": "Game",
+            "team": "Model Winner",
+            "env_temp_source": "Weather Source",
+            "home_vs_hand_games": "Home vs Hand Games",
+            "away_vs_hand_games": "Away vs Hand Games",
+            "home_starter_hand": "Home SP Hand",
+            "away_starter_hand": "Away SP Hand",
+            "lineup_status": "Lineups",
+            "status": "Status",
+            "game_time_et": "Game Time ET",
+        }
+    )
+
+    st.dataframe(
+        diagnostics,
+        use_container_width=True,
+        hide_index=True,
+    )
+
 
 with st.expander("Show table view"):
     display_board = board.copy()
@@ -1236,6 +2012,7 @@ with st.expander("Show table view"):
 
 with st.expander("Show both sides for every visible game"):
     side_display = all_sides.copy()
+
     side_display["Model Prob"] = side_display["model_prob"].apply(format_percent)
     side_display["Fair ML"] = side_display["fair_ml"].apply(format_moneyline)
     side_display["Market ML"] = side_display["market_ml"].apply(format_moneyline)
@@ -1291,7 +2068,7 @@ with st.expander("Show both sides for every visible game"):
 st.divider()
 
 st.caption(
-    "Important: v1.0.2 changes the interface only. "
-    "The prediction model remains the validated team-only Production v1 model. "
+    "Moneyline Winners v1.1. "
+    "Model winner selection is based only on model win probability. "
     "Market odds are optional display data and are not used to create the prediction."
 )

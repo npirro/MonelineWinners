@@ -17,7 +17,7 @@ import streamlit as st
 # =========================
 
 st.set_page_config(
-    page_title="Moneyline Winners v1.1.1",
+    page_title="Moneyline Winners v1.2",
     page_icon="⚾",
     layout="wide",
 )
@@ -26,6 +26,7 @@ MLB_BASE = "https://statsapi.mlb.com/api/v1"
 OPEN_METEO_BASE = "https://api.open-meteo.com/v1/forecast"
 
 MODEL_PATH = Path("model_artifacts/mlb_candidate_v1_1_logistic_model.joblib")
+TOTALS_MODEL_PATH = Path("model_artifacts/mlb_totals_projection_v0_1.joblib")
 
 FINAL_STATES = {"Final", "Game Over", "Completed Early"}
 
@@ -380,6 +381,43 @@ st.markdown(
             padding: 22px;
             color: #dceaff;
             font-weight: 750;
+        }
+
+        .totals-card {
+            background: linear-gradient(135deg, #101b2e, #1a2842);
+            border: 1px solid #315a86;
+            border-radius: 20px;
+            padding: 18px;
+            margin-bottom: 16px;
+            box-shadow: 0 0 18px rgba(0,0,0,0.25);
+            min-height: 290px;
+        }
+
+        .totals-main {
+            font-size: 34px;
+            font-weight: 950;
+            color: #FFE27A;
+            line-height: 1.0;
+            margin-top: 4px;
+            margin-bottom: 8px;
+        }
+
+        .totals-signal {
+            font-size: 20px;
+            font-weight: 900;
+            color: #8fd3ff;
+            margin-top: 5px;
+            margin-bottom: 10px;
+        }
+
+        .preview-warning {
+            background: rgba(255,226,122,0.08);
+            border: 1px solid rgba(255,226,122,0.18);
+            border-radius: 14px;
+            padding: 12px 14px;
+            color: #FFE27A;
+            font-weight: 800;
+            margin-bottom: 14px;
         }
 
         div[data-testid="stDataFrame"] {
@@ -758,6 +796,29 @@ def load_model_artifact():
     return model, features, "candidate_v1_1", {}
 
 
+
+@st.cache_resource
+def load_totals_artifact():
+    if not TOTALS_MODEL_PATH.exists():
+        return None, [], "totals_missing", {}
+
+    artifact = joblib.load(TOTALS_MODEL_PATH)
+
+    if isinstance(artifact, dict):
+        model = artifact.get("model") or artifact.get("pipeline") or artifact.get("estimator")
+        features = artifact.get("features") or artifact.get("feature_names") or []
+        model_version = artifact.get("model_version", "totals_projection_v0_1")
+
+        if model is None:
+            return None, [], "totals_invalid", artifact
+
+        return model, list(features), model_version, artifact
+
+    model = artifact
+    features = infer_model_features(model)
+    return model, features, "totals_projection_v0_1", {}
+
+
 def infer_model_features(model):
     if hasattr(model, "feature_names_in_"):
         return list(model.feature_names_in_)
@@ -1123,6 +1184,118 @@ def build_base_team_features_for_game(game, team_states):
         ),
         "home_field": 1.0,
     }
+
+
+
+# =========================
+# Totals Projection Preview Helpers
+# =========================
+
+def build_totals_feature_dict(game, team_states, base_features, hand_features):
+    home_team_id = get_team_id(game, "home")
+    away_team_id = get_team_id(game, "away")
+
+    home_snapshot = snapshot_team_state(team_states[home_team_id])
+    away_snapshot = snapshot_team_state(team_states[away_team_id])
+
+    totals_features = dict(base_features)
+    totals_features.update(hand_features)
+
+    totals_features.update(
+        {
+            "home_win_pct": home_snapshot["win_pct"],
+            "away_win_pct": away_snapshot["win_pct"],
+            "home_rpg": home_snapshot["rpg"],
+            "away_rpg": away_snapshot["rpg"],
+            "home_rapg": home_snapshot["rapg"],
+            "away_rapg": away_snapshot["rapg"],
+            "home_run_diff_per_game": home_snapshot["run_diff_per_game"],
+            "away_run_diff_per_game": away_snapshot["run_diff_per_game"],
+            "home_run_diff_pg": home_snapshot["run_diff_pg"],
+            "away_run_diff_pg": away_snapshot["run_diff_pg"],
+            "home_recent_win_pct": home_snapshot["recent_win_pct"],
+            "away_recent_win_pct": away_snapshot["recent_win_pct"],
+            "home_recent_rpg": home_snapshot["recent_rpg"],
+            "away_recent_rpg": away_snapshot["recent_rpg"],
+            "home_recent_rapg": home_snapshot["recent_rapg"],
+            "away_recent_rapg": away_snapshot["recent_rapg"],
+            "home_recent_run_diff_per_game": home_snapshot["recent_run_diff_pg"],
+            "away_recent_run_diff_per_game": away_snapshot["recent_run_diff_pg"],
+            "home_recent_run_diff_pg": home_snapshot["recent_run_diff_pg"],
+            "away_recent_run_diff_pg": away_snapshot["recent_run_diff_pg"],
+        }
+    )
+
+    derived_map = {
+        "win_pct_diff": "abs_win_pct_diff",
+        "rpg_diff": "abs_rpg_diff",
+        "rapg_diff": "abs_rapg_diff",
+        "run_diff_per_game_diff": "abs_run_diff_per_game_diff",
+        "recent_win_pct_diff": "abs_recent_win_pct_diff",
+        "recent_rpg_diff": "abs_recent_rpg_diff",
+        "recent_rapg_diff": "abs_recent_rapg_diff",
+        "opp_adj_offense_diff": "abs_opp_adj_offense_diff",
+        "vs_hand_games_scaled_diff": "abs_vs_hand_games_scaled_diff",
+    }
+
+    for src, dest in derived_map.items():
+        totals_features[dest] = abs(float(totals_features.get(src, 0.0) or 0.0))
+
+    totals_features["pre_total_offense_rpg_sum"] = totals_features["home_rpg"] + totals_features["away_rpg"]
+    totals_features["pre_total_allowed_rpg_sum"] = totals_features["home_rapg"] + totals_features["away_rapg"]
+    totals_features["pre_recent_offense_rpg_sum"] = totals_features["home_recent_rpg"] + totals_features["away_recent_rpg"]
+    totals_features["pre_recent_allowed_rpg_sum"] = totals_features["home_recent_rapg"] + totals_features["away_recent_rapg"]
+
+    return totals_features
+
+
+def predict_projected_total(totals_model, totals_features, feature_dict):
+    if totals_model is None or not totals_features:
+        return None
+
+    X = pd.DataFrame([feature_dict])
+
+    for f in totals_features:
+        if f not in X.columns:
+            X[f] = 0.0
+
+    X = X[totals_features].astype(float)
+
+    try:
+        return float(totals_model.predict(X)[0])
+    except Exception:
+        return None
+
+
+def round_half_up(value):
+    try:
+        return round(float(value) * 2) / 2
+    except Exception:
+        return None
+
+
+def required_book_total_for_under(projected_total, min_edge=0.50, minimum_line=9.5):
+    if projected_total is None or pd.isna(projected_total):
+        return None
+
+    target = float(projected_total) + float(min_edge)
+    half_line = (int(target * 2 + 0.999999) / 2.0)
+    return max(float(minimum_line), half_line)
+
+
+def total_watch_label(projected_total):
+    if projected_total is None or pd.isna(projected_total):
+        return "Totals model unavailable"
+
+    under_edge_95 = 9.5 - float(projected_total)
+
+    if under_edge_95 >= 0.75:
+        return "Strong Under 9.5+ Watch"
+    if under_edge_95 >= 0.50:
+        return "Under 9.5+ Watch"
+    if float(projected_total) >= 9.75:
+        return "High Projection Watch"
+    return "Projection Only"
 
 
 # =========================
@@ -1928,19 +2101,128 @@ def render_card_grid(df, columns=3, show_market_data=False, section_key="board")
             )
 
 
+
+
+def render_totals_card(row):
+    projected_total = row.get("projected_total_runs", None)
+    projected_text = f"{projected_total:.1f}" if projected_total is not None and pd.notna(projected_total) else "—"
+
+    edge_95 = row.get("under_edge_at_9_5", None)
+    edge_95_text = f"+{edge_95:.1f}" if edge_95 is not None and pd.notna(edge_95) and edge_95 > 0 else f"{edge_95:.1f}" if edge_95 is not None and pd.notna(edge_95) else "—"
+
+    needed_line = row.get("needed_book_total_for_under", None)
+    needed_line_text = f"{needed_line:.1f}+" if needed_line is not None and pd.notna(needed_line) else "—"
+
+    signal = row.get("total_signal", "Projection Only")
+    signal_class = "pill-good" if "Under" in signal else "pill-info"
+
+    card_html = "\n".join(
+        [
+            '<div class="totals-card">',
+            f'<div class="game-title">{h(row.get("game", ""))}</div>',
+            f'<div class="game-subtitle">{h(row.get("game_time_et", "TBD"))} ET • {h(row.get("status", ""))}</div>',
+            '<div class="small-label">Projected Total Runs</div>',
+            f'<div class="totals-main">{h(projected_text)}</div>',
+            '<div class="small-label">Research Preview Signal</div>',
+            f'<div class="totals-signal">{h(signal)}</div>',
+            '<div class="mini-grid">',
+            '<div class="mini-box">',
+            '<div class="small-label">Needs Book Total</div>',
+            f'<div class="mini-value">{h(needed_line_text)}</div>',
+            '</div>',
+            '<div class="mini-box">',
+            '<div class="small-label">Under Edge @ 9.5</div>',
+            f'<div class="mini-value">{h(edge_95_text)}</div>',
+            '</div>',
+            '<div class="mini-box">',
+            '<div class="small-label">Weather</div>',
+            f'<div class="mini-value">{h(row.get("env_temp_text", "—"))}</div>',
+            '</div>',
+            '<div class="mini-box">',
+            '<div class="small-label">Status</div>',
+            f'<div class="mini-value" style="font-size: 14px;">{h(row.get("lineup_status", "Unknown"))}</div>',
+            '</div>',
+            '</div>',
+            '<div class="status-row">',
+            f'<span class="pill {signal_class}">{h(signal)}</span>',
+            '<span class="pill pill-warn">No real book line yet</span>',
+            '</div>',
+            '</div>',
+        ]
+    )
+
+    st.markdown(card_html, unsafe_allow_html=True)
+
+
+def render_totals_grid(df, columns=3):
+    if df.empty:
+        st.info("No totals projections available.")
+        return
+
+    cols = st.columns(columns)
+
+    for idx, (_, row) in enumerate(df.iterrows()):
+        with cols[idx % columns]:
+            render_totals_card(row)
+
+
+def render_mixed_parlay_preview(top_ml, totals_candidate):
+    st.markdown(
+        """
+        <div class="preview-warning">
+            Research Preview Only. This does not calculate real sportsbook edge yet because no actual total line is connected.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if top_ml.empty or len(top_ml) < 3:
+        st.info("Need at least three ML picks at 58%+ to build the mixed preview.")
+        return
+
+    if totals_candidate.empty:
+        st.info("No high-total Under watch candidate found outside the top 3 ML games.")
+        return
+
+    c1, c2 = st.columns([0.62, 0.38])
+
+    with c1:
+        st.write("### Top 3 ML Legs")
+        ml_display = top_ml.copy()
+        ml_display["Win Prob"] = ml_display["model_prob"].apply(format_percent)
+        ml_display["Fair ML"] = ml_display["fair_ml"].apply(format_moneyline)
+        ml_display = ml_display[["game", "team", "side", "Win Prob", "Fair ML"]].rename(
+            columns={
+                "game": "Game",
+                "team": "Pick",
+                "side": "Home/Away",
+            }
+        )
+        st.dataframe(ml_display, use_container_width=True, hide_index=True)
+
+    with c2:
+        st.write("### Total Watch Leg")
+        render_totals_card(totals_candidate.iloc[0])
+
+    st.caption(
+        "Current concept rule: top 3 ML picks at 58%+ plus one high-total Under watch leg. "
+        "A real book total and price are still required before this can become a qualified betting edge."
+    )
+
 # =========================
 # App
 # =========================
 
 last_updated_et = datetime.now(ZoneInfo("America/New_York")).strftime("%I:%M %p ET")
 
-st.title("⚾ Moneyline Winners v1.1.1")
+st.title("⚾ Moneyline Winners v1.2")
 st.caption(
     f"Production Model v1.1 — team strength + weather + opponent-adjusted offense + hand-matchup sample. "
-    f"UI v1.1.1 adds Live Outcome Tracker. Last updated: {last_updated_et}."
+    f"UI v1.2 adds Totals Projection Preview. Last updated: {last_updated_et}."
 )
 
 model, model_features, model_version, model_artifact = load_model_artifact()
+totals_model, totals_features, totals_model_version, totals_artifact = load_totals_artifact()
 
 today_et = datetime.now(ZoneInfo("America/New_York")).date()
 
@@ -2005,6 +2287,13 @@ with st.sidebar:
     st.write("- `env_temp`")
     st.write("- `opp_adj_offense_diff`")
     st.write("- `vs_hand_games_scaled_diff`")
+
+    st.write("### Totals Preview")
+    if totals_model is None:
+        st.warning("Totals model artifact not found. Copy mlb_totals_projection_v0_1.joblib into model_artifacts/.")
+    else:
+        st.write(f"Version: `{totals_model_version}`")
+        st.write(f"Features: `{len(totals_features)}`")
 
     st.write("### Last Updated")
     st.write(last_updated_et)
@@ -2088,6 +2377,7 @@ except Exception as e:
 game_rows = []
 all_side_rows = []
 weather_sources = []
+total_preview_rows = []
 
 
 for game in visible_games:
@@ -2137,6 +2427,24 @@ for game in visible_games:
         }
     )
 
+    totals_feature_dict = build_totals_feature_dict(
+        game=game,
+        team_states=team_states,
+        base_features=features,
+        hand_features=hand_features,
+    )
+
+    projected_total_runs = predict_projected_total(
+        totals_model=totals_model,
+        totals_features=totals_features,
+        feature_dict=totals_feature_dict,
+    )
+
+    under_edge_at_9_5 = None if projected_total_runs is None else 9.5 - projected_total_runs
+    under_edge_at_10_5 = None if projected_total_runs is None else 10.5 - projected_total_runs
+    needed_book_total = required_book_total_for_under(projected_total_runs, min_edge=0.50, minimum_line=9.5)
+    total_signal = total_watch_label(projected_total_runs)
+
     X = pd.DataFrame([features])
 
     for f in model_features:
@@ -2171,6 +2479,27 @@ for game in visible_games:
 
     home_reasons = build_reasons(features, "Home")
     away_reasons = build_reasons(features, "Away")
+
+    total_preview_rows.append(
+        {
+            "game_pk": game_pk,
+            "game": game_label,
+            "away_team": away_abbr,
+            "home_team": home_abbr,
+            "projected_total_runs": projected_total_runs,
+            "needed_book_total_for_under": needed_book_total,
+            "under_edge_at_9_5": under_edge_at_9_5,
+            "under_edge_at_10_5": under_edge_at_10_5,
+            "total_signal": total_signal,
+            "status": game_status,
+            "game_time_et": game_time_et,
+            "lineup_status": lineup_status,
+            "env_temp": env_temp,
+            "env_temp_text": f"{env_temp:.1f}°" if env_temp is not None else "—",
+            "env_temp_source": env_temp_source,
+            "research_preview_only": True,
+        }
+    )
 
     candidates = [
         {
@@ -2243,6 +2572,13 @@ for game in visible_games:
 
 board = pd.DataFrame(game_rows)
 all_sides = pd.DataFrame(all_side_rows)
+totals_preview = pd.DataFrame(total_preview_rows)
+
+if not totals_preview.empty:
+    totals_preview = totals_preview.sort_values(
+        ["under_edge_at_9_5", "projected_total_runs"],
+        ascending=[False, True],
+    ).copy()
 
 if board.empty:
     board = pd.DataFrame(
@@ -2259,6 +2595,16 @@ if board.empty:
 
 if all_sides.empty:
     all_sides = board.copy()
+
+if totals_preview.empty:
+    totals_preview = pd.DataFrame(
+        columns=[
+            "game_pk", "game", "away_team", "home_team", "projected_total_runs",
+            "needed_book_total_for_under", "under_edge_at_9_5", "under_edge_at_10_5",
+            "total_signal", "status", "game_time_et", "lineup_status", "env_temp",
+            "env_temp_text", "env_temp_source", "research_preview_only",
+        ]
+    )
 
 board["lineup_sort"] = board["lineup_status"].apply(lineup_sort_value)
 
@@ -2277,6 +2623,16 @@ pregame_board = pregame_board.sort_values(
 ).copy()
 
 pregame_board["rank"] = None
+
+pregame_totals_preview = totals_preview[totals_preview["status"].apply(lambda s: s in PREGAME_STATES or "Scheduled" in str(s) or "Pre-Game" in str(s))].copy()
+
+if not pregame_totals_preview.empty:
+    under_watch = pregame_totals_preview[
+        pd.to_numeric(pregame_totals_preview["under_edge_at_9_5"], errors="coerce") >= 0.50
+    ].copy()
+    under_watch = under_watch.sort_values("under_edge_at_9_5", ascending=False).copy()
+else:
+    under_watch = pd.DataFrame(columns=totals_preview.columns)
 
 
 # =========================
@@ -2355,7 +2711,7 @@ with c5:
 # Main Tabs
 # =========================
 
-winner_tab, tracker_tab = st.tabs(["Winner Board", "Live Outcome Tracker"])
+winner_tab, totals_tab, mixed_tab, tracker_tab = st.tabs(["Winner Board", "Totals Projection Preview", "Mixed Parlay Preview", "Live Outcome Tracker"])
 
 with winner_tab:
     st.subheader("Best Available Winners")
@@ -2381,6 +2737,42 @@ with winner_tab:
         show_market_data=show_market_data,
         section_key="pregame_board",
     )
+
+with totals_tab:
+    st.subheader("Totals Projection Preview")
+    st.caption(
+        "Research preview only. This projects combined runs. It does not calculate real betting edge until an actual sportsbook total line is connected."
+    )
+
+    if totals_model is None:
+        st.warning("Totals model artifact is missing. Copy mlb_totals_projection_v0_1.joblib into model_artifacts/ and refresh.")
+    else:
+        st.markdown(
+            """
+            <div class="preview-warning">
+                No real book line connected yet. Under watch means: if the market total is 9.5 or higher, compare it to our projected total.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.write("### High-Total Under Watch")
+        render_totals_grid(under_watch.head(6), columns=3)
+
+        st.divider()
+        st.write("### Full Totals Projection Slate")
+        render_totals_grid(pregame_totals_preview.head(12), columns=3)
+
+with mixed_tab:
+    st.subheader("Mixed Parlay Preview")
+    st.caption(
+        "Concept from research: top 3 ML picks at 58%+ plus one high-total Under watch candidate. This is not a betting recommendation until real odds are connected."
+    )
+
+    top_3_ml = pregame_board[pregame_board["model_prob"] >= 0.58].copy().head(3)
+    top_3_game_ids = set(str(x) for x in top_3_ml.get("game_pk", []))
+    mixed_total_candidate = under_watch[~under_watch["game_pk"].astype(str).isin(top_3_game_ids)].head(1).copy()
+    render_mixed_parlay_preview(top_3_ml, mixed_total_candidate)
 
 with tracker_tab:
     st.subheader("Live Outcome Tracker")
@@ -2451,6 +2843,44 @@ with st.expander("Show v1.1 feature diagnostics"):
         use_container_width=True,
         hide_index=True,
     )
+
+
+with st.expander("Show totals projection table"):
+    totals_table = totals_preview.copy()
+
+    if not totals_table.empty:
+        totals_table["Projected Total"] = totals_table["projected_total_runs"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "—")
+        totals_table["Needs Book Total"] = totals_table["needed_book_total_for_under"].apply(lambda x: f"{x:.1f}+" if pd.notna(x) else "—")
+        totals_table["Under Edge @ 9.5"] = totals_table["under_edge_at_9_5"].apply(lambda x: f"{x:+.2f}" if pd.notna(x) else "—")
+        totals_table["Under Edge @ 10.5"] = totals_table["under_edge_at_10_5"].apply(lambda x: f"{x:+.2f}" if pd.notna(x) else "—")
+        totals_table["Env Temp"] = totals_table["env_temp"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "—")
+
+        totals_table = totals_table[
+            [
+                "game",
+                "Projected Total",
+                "Needs Book Total",
+                "Under Edge @ 9.5",
+                "Under Edge @ 10.5",
+                "total_signal",
+                "Env Temp",
+                "env_temp_source",
+                "lineup_status",
+                "status",
+                "game_time_et",
+            ]
+        ].rename(
+            columns={
+                "game": "Game",
+                "total_signal": "Preview Signal",
+                "env_temp_source": "Weather Source",
+                "lineup_status": "Lineups",
+                "status": "Status",
+                "game_time_et": "Game Time ET",
+            }
+        )
+
+    st.dataframe(totals_table, use_container_width=True, hide_index=True)
 
 
 with st.expander("Show table view"):
@@ -2566,8 +2996,8 @@ with st.expander("Show both sides for every visible game"):
 st.divider()
 
 st.caption(
-    "Moneyline Winners v1.1.1. "
+    "Moneyline Winners v1.2. "
     "Model winner selection is based only on model win probability. "
     "Market odds are optional display data and are not used to create the prediction. "
-    "Live Outcome Tracker is for monitoring selected games only."
+    "Totals Projection Preview is research-only until real sportsbook totals are connected. Live Outcome Tracker is for monitoring selected games only."
 )
